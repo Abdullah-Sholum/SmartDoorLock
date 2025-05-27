@@ -1,0 +1,11 @@
+ukuran, 
+p = 255mm
+l = 67mm
+t = 29mm
+
+diameter outline gagang.
+outline=34mm
+inline=16mm
+
+jarak outline bawah ke batas bawah dihitung=97mm
+jarak outline atas ke batas atas dihitung 127mm   

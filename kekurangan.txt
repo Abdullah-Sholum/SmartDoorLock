@@ -1,0 +1,6 @@
+problem
+setting waktu di #include <TimeLib.h>
+
+1. tampilan pertama tampilkan IP address buat wifi, next jika wifi terhubung, wifi bakal terhubung. 
+niat tampilan utama nampilkan tgl & waktu
+2. tampilkan waktu standby & dia bisa baca input.
