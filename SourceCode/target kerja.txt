@@ -1,0 +1,34 @@
+1. Awal nyala perangkat cek koneksi internet
+2. jika tidak terkoneksi internet perangkat akan membuat hotspot dan menampilkan ip addres untuk konfigurasi wifi
+3. jika sudah terkoneksi perangkat akan mengecek koneksi sensor fingerprint
+3. apabila sensor tidak terkoneksi maka lcd akan menampilkan error dan perangkat tidak bekerja sebelum error di perbaiki
+4. jika semua aman tampilan utama akan menampilkan tanggal dan waktu
+5. untuk default sandi "1234" jika sandi benar pintu akan terbuka otomatis tanpa menekan tombol ok
+6. apabila fingerprint sesuai pintu akan otomatis terbuka
+7. apabila kartu terdaftar maka pintu terbuka
+8. apabila jam sudah memasuki mode malam maka kunci pintu aktif
+9. selama mode malam hanya finger print yang bisa membuka pintu dan membuka kunci
+10. pushbutton dapat membuka pintu dan membuka kunci di mode malam atau pagi
+11. dan blynk juga dapat membuka pintu dan membuka kunci di mode malam atau pagi
+
+jika memasukan sandi Admin default "0000" maka akan masuk mode setting
+ yang dimana dapat mengatur finger, sandi, rfid, wifi, dan blynk
+dimana menu utama menampilkan pilihan pada lcd
+1.finger
+  sub menu:
+    1.menambahkan finger
+    2.menghapus finger
+2.sandi
+  sub menu:
+    1. mengganti sandi
+    2. mereset sandi
+3.rfid
+  sub menu:
+    1. menambahkan kartu
+    2. menghapus kartu
+4.wifi
+  sub menu:
+    1. mengganti wifi
+    2. mengganti blynk
+dimana setiap pilihan pada sub menu ada konfirmasi jika menekan tombol ok(#) pada keypad akan melaksanakan tugas
+dan tombol Del (*) akan kembali ke menu sebelumnya dan exit ketika pada menu utama
