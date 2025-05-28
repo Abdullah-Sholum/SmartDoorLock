@@ -5,10 +5,17 @@
 #include <MFRC522.h>
 #include <Adafruit_Fingerprint.h>
 #include <HardwareSerial.h>
+#include <Wire.h>
+#include <PCF8575.h>
+#include <LiquidCrystal_I2C.h>
 
+// ==================================Inisiasi hardware, pinout, etc==================================
 // daftarkan alamat lcd beserta ukuran row & kolom
 // inisiasi objcet lcd dengan class LiquidCrystal_I2C dengan parameter alamat lcd, jumlah kolom & jumlah row
 LiquidCrystal_I2C lcd(0x27,20,4);
+
+// Inisialisasi PCF8575 di alamat 0x20
+PCF8575 pcf(0x20);
 
 // inisiasi pin untuk relay 1 & 2
 const int relayMain   = 26;
@@ -33,6 +40,56 @@ bool firstRun = true;
 HardwareSerial mySerial(2);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 
+// Keypad 4x3
+// set Rows & Cols 
+// buat array 2 dimensi dengen ukuran Rows x Cols, dengan isi berupa mapping keypad
+// mapping pin kedalam array berdasarkan jumlah Rows & Cols
+const byte ROWS = 4;
+const byte COLS = 3;
+char keys[ROWS][COLS] = {
+  {'1','2','3'},
+  {'4','5','6'},
+  {'7','8','9'},
+  {'*','0','#'}
+};
+// Pin yang terhubung ke PCF8575
+byte rowPins[ROWS] = {0, 1, 2, 3}; // P0-P3 sebagai baris (input)
+byte colPins[COLS] = {6, 5, 4};    // P4-P6 sebagai kolom (output)
+// ==================================end of Inisiasi hardware, pinout, etc==================================
+
+
+// ==================================Fungsi Fungsionalitas==================================
+// Fungsi untuk membaca keypad
+// gunakan char karena mengembalikan nilai int
+// 
+char readKeypad() {
+  for (byte c = 0; c < COLS; c++) {
+    // Aktifkan kolom saat ini (LOW)
+    pcf.write(colPins[c], LOW);
+
+    // Baca semua baris
+    for (byte r = 0; r < ROWS; r++) {
+      if (pcf.read(rowPins[r]) == LOW) {  // Jika baris LOW (tombol ditekan)
+        char key = keys[r][c];
+        // Tunggu debounce dan lepas tombol
+        delay(50);
+        while (pcf.read(rowPins[r]) == LOW);
+        
+        // Nonaktifkan kolom sebelum return
+        pcf.write(colPins[c], HIGH);
+        return key;
+      }
+    }
+
+    // Nonaktifkan kolom (HIGH)
+    pcf.write(colPins[c], HIGH);
+  }
+  
+  return '\0'; // Tidak ada tombol ditekan
+}
+// ==================================end of Fungsi Fungsionalitas==================================
+
+// ==================================fungsi Debug==================================
 // fungsi print rfid ke lcd
 void cetakRfid() {
   lcd.clear();
@@ -313,6 +370,25 @@ void testRelay() {
   digitalWrite(relayMain, LOW);
   digitalWrite(relaySecond, LOW);
 }
+// fungsi untuk mengetes keypad
+void testKeypad() {
+  char key = readKeypad();
+  
+  if (key != '\0') {
+    Serial.print("Key pressed: ");
+    Serial.println(key);
+
+    // Tampilkan di LCD
+    lcd.setCursor(0, 1);
+    lcd.print("Pressed: ");
+    lcd.print(key);
+    lcd.print("    "); // Clear sisa karakter
+  }
+  
+  delay(10);
+}
+
+// ==================================end of fungsi Debug==================================
 
 void setup() {
   // untuk rfid
@@ -335,6 +411,28 @@ void setup() {
   // inisiasi lcd
   lcd.init();
   
+  // Inisialisasi PCF8575
+  // dengan mengecek apa pcf terkoneksi kemudian beri output error
+  while (!pcf.begin()) {
+    lcd.clear();
+    lcd.setCursor(2, 1);
+    lcd.print("PCF8575 Error!");
+    delay(2000);
+  }
+  // Set semua pin kolom sebagai output HIGH (tidak aktif)
+  /* buat perulangan for dengen kondisi awal c = 0, ketika c kurang dari COLS, maka c +1 
+     maka write pcf pin di colPin index 0 sebagai high
+     iterasi sampai c=cols*/
+  for (byte c = 0; c < COLS; c++) {
+    pcf.write(colPins[c], HIGH);
+  }
+  // Set semua pin baris sebagai input (HIGH karena pull-up)
+  /* buat iterasi +1 r sampai r = ROWS
+  atur rowsPin[index-r] HIGH*/
+  for (byte r = 0; r < ROWS; r++) {
+    pcf.write(rowPins[r], HIGH);
+  }
+
   // inisiasi pin relay sebagai output
   pinMode(relayMain, OUTPUT);
   pinMode(relaySecond, OUTPUT);
@@ -355,10 +453,12 @@ void setup() {
 }
 
 void loop() {
-  // fungsi debug input
+  // ==================================pemanggilan debug input==================================
+
   // testBtn();
   // cetakRfid();
   // testFinger();
+  testKeypad();
 }
 
 
