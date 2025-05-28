@@ -100,3 +100,5 @@ char readKeypad() {
   
   return '\0'; // Tidak ada tombol ditekan
 }
+
+// wtffff
