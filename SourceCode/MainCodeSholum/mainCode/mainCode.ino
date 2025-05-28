@@ -151,7 +151,7 @@ void testFinger() {
     }
 
     // Step 3: Ambil image dan buat template
-    // convert data menjadi template lalu simpan di slot 1 & cek jika berhasil.
+    // convert data menjadi template lalu simpan di slot 1 & cek jika tidak berhasil maka ulangi dari awal
     if (finger.image2Tz(1) != FINGERPRINT_OK) {
       lcd.clear();
       lcd.setCursor(0, 0);
@@ -161,7 +161,6 @@ void testFinger() {
     }
 
     // Minta angkat jari
-    // minta angkat jari dari sensor ketika penyimpanan data berhasil
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Angkat jari...");
@@ -223,11 +222,22 @@ void testFinger() {
   }
 
   // Step 5: Tunggu tombol untuk lanjut verifikasi
+  /* disini agak triky
+     -intinya while 1 akan bersifat true (melakukan looping) selama tombol tidak ditekan *btn bernilai high secara default
+     -kemudian ketika ditekan, btn=low & while pertama menjadi false.  
+     -diwhile 2 ketika tombol ditekan terus maka btn=low & terjadi looping selama btn tidak kembali ke kondisi default * HIGH.
+     -while 2 false jika btn=high lagi*/
   lcd.clear();
   lcd.setCursor(0, 0);
   lcd.print("Tekan btn lanjut");
-  while (digitalRead(btn) == HIGH);  // tunggu ditekan
-  while (digitalRead(btn) == LOW);   // tunggu dilepas
+  while (digitalRead(btn) == HIGH) {
+    lcd.clear();
+    lcd.setCursor(1, 0);
+    lcd.print("Tekan tombol");
+    lcd.setCursor(1, 1);
+    lcd.print("untuk lanjut");
+  }  
+  while (digitalRead(btn) == LOW); 
 
   // Step 6: Verifikasi jari terus menerus
   while (true) {
@@ -235,10 +245,12 @@ void testFinger() {
     lcd.setCursor(0, 0);
     lcd.print("Tempel jari...");
 
-    // 
+    // while disini digunakan untuk berjalan terus sampai sensor menangkap gambar yang benar.
     while (finger.getImage() != FINGERPRINT_OK);
 
+    // ubah sidik jari yang ditangkap & ubah menjadi template slot 1, jika gagal maka ulang dari while
     if (finger.image2Tz(1) != FINGERPRINT_OK) continue;
+    // cek kondisi jika pencarian teplate pada slot 1 sesuai maka tampilkan "jari sesuai" & sebaliknya tampilkan "jari tidak cocok"
     if (finger.fingerSearch() == FINGERPRINT_OK) {
       lcd.clear();
       lcd.setCursor(0, 0);
@@ -335,13 +347,18 @@ void setup() {
   // testing output
   testLcd();
   // testRelay();
+
+  // dev mode
+  // finger.begin(57600);
+  // finger.verifyPassword();
+  // finger.emptyDatabase(); // hanya saat awal boot
 }
 
 void loop() {
   // fungsi debug input
   // testBtn();
   // cetakRfid();
-  testFinger();
+  // testFinger();
 }
 
 
