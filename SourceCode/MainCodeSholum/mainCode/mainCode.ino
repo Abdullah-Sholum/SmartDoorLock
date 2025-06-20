@@ -44,49 +44,126 @@ Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 // set Rows & Cols 
 // buat array 2 dimensi dengen ukuran Rows x Cols, dengan isi berupa mapping keypad
 // mapping pin kedalam array berdasarkan jumlah Rows & Cols
-const byte ROWS = 4;
-const byte COLS = 3;
-char keys[ROWS][COLS] = {
-  {'1','2','3'},
-  {'4','5','6'},
-  {'7','8','9'},
-  {'*','0','#'}
+// const byte ROWS = 4;
+// const byte COLS = 3;
+// char keys[ROWS][COLS] = {
+//   {'1','2','3'},
+//   {'4','5','6'},
+//   {'7','8','9'},
+//   {'*','0','#'}
+// };
+// // Pin yang terhubung ke PCF8575
+// byte rowPins[ROWS] = {0, 1, 2, 3}; // P0-P3 sebagai baris (input)
+// byte colPins[COLS] = {6, 5, 4};    // P4-P6 sebagai kolom (output)
+
+// class keypad
+class KeypadPCF8575 {
+  private:
+    const byte ROWS = 4;
+    const byte COLS = 3;
+    char keys[4][3] = {
+      {'1','2','3'},
+      {'4','5','6'},
+      {'7','8','9'},
+      {'*','0','#'}
+    };
+    byte rowPins[4] = {0, 1, 2, 3}; // P0–P3 sebagai input (baris)
+    byte colPins[3] = {6, 5, 4};    // P4–P6 sebagai output (kolom)
+    char lastKey = '\0';
+
+  public:
+    void begin() {
+      while (!pcf.begin()) {
+        Serial.println("PCF8575 Error!");
+        delay(2000);
+      }
+
+      for (byte c = 0; c < COLS; c++) {
+        pcf.write(colPins[c], HIGH);
+      }
+
+      for (byte r = 0; r < ROWS; r++) {
+        pcf.write(rowPins[r], HIGH);
+      }
+    }
+
+    char read() {
+      for (byte c = 0; c < COLS; c++) {
+        pcf.write(colPins[c], LOW);
+
+        for (byte r = 0; r < ROWS; r++) {
+          if (pcf.read(rowPins[r]) == LOW) {
+            lastKey = keys[r][c];
+            delay(50);
+            while (pcf.read(rowPins[r]) == LOW); // tunggu tombol dilepas
+            pcf.write(colPins[c], HIGH);
+            return lastKey;
+          }
+        }
+
+        pcf.write(colPins[c], HIGH);
+      }
+
+      return '\0';
+    }
+
+    bool key(char c) {
+      return lastKey == c;
+    }
+
+    void clearLastKey() {
+      lastKey = '\0';
+    }
 };
-// Pin yang terhubung ke PCF8575
-byte rowPins[ROWS] = {0, 1, 2, 3}; // P0-P3 sebagai baris (input)
-byte colPins[COLS] = {6, 5, 4};    // P4-P6 sebagai kolom (output)
+// buat objet keypad berdasar class keypad
+KeypadPCF8575 keypad;
 // ==================================end of Inisiasi hardware, pinout, etc==================================
 
 
 // ==================================Fungsi Fungsionalitas==================================
 // Fungsi untuk membaca keypad
 // gunakan char karena mengembalikan nilai int
-// 
-char readKeypad() {
-  for (byte c = 0; c < COLS; c++) {
-    // Aktifkan kolom saat ini (LOW)
-    pcf.write(colPins[c], LOW);
+// char readKeypad() {
+//   for (byte c = 0; c < COLS; c++) {
+//     // Aktifkan kolom saat ini (LOW)
+//     pcf.write(colPins[c], LOW);
 
-    // Baca semua baris
-    for (byte r = 0; r < ROWS; r++) {
-      if (pcf.read(rowPins[r]) == LOW) {  // Jika baris LOW (tombol ditekan)
-        char key = keys[r][c];
-        // Tunggu debounce dan lepas tombol
-        delay(50);
-        while (pcf.read(rowPins[r]) == LOW);
+//     // Baca semua baris
+//     for (byte r = 0; r < ROWS; r++) {
+//       if (pcf.read(rowPins[r]) == LOW) {  // Jika baris LOW (tombol ditekan)
+//         char key = keys[r][c];
+//         // Tunggu debounce dan lepas tombol
+//         delay(50);
+//         while (pcf.read(rowPins[r]) == LOW);
         
-        // Nonaktifkan kolom sebelum return
-        pcf.write(colPins[c], HIGH);
-        return key;
-      }
-    }
+//         // Nonaktifkan kolom sebelum return
+//         pcf.write(colPins[c], HIGH);
+//         return key;
+//       }
+//     }
 
-    // Nonaktifkan kolom (HIGH)
-    pcf.write(colPins[c], HIGH);
-  }
+//     // Nonaktifkan kolom (HIGH)
+//     pcf.write(colPins[c], HIGH);
+//   }
   
-  return '\0'; // Tidak ada tombol ditekan
-}
+//   return '\0'; // Tidak ada tombol ditekan
+// }
+
+// void readKeypad() {
+//    char key = keypad.read();
+//   if (key != '\0') {
+//     lcd.clear();
+//     lcd.setCursor(1,0);
+//     lcd.print("Tombol ditekan: ");
+//     lcd.print(key);
+//   }
+
+//   if (keypad.key('1')) {
+//     lcd.setCursor(1,0);
+//     lcd.print("Tombol '1' ditekan");
+//     keypad.clearLastKey(); // reset agar tidak terus terbaca
+//   }
+// }
 // ==================================end of Fungsi Fungsionalitas==================================
 
 // ==================================fungsi Debug==================================
@@ -372,20 +449,34 @@ void testRelay() {
 }
 // fungsi untuk mengetes keypad
 void testKeypad() {
-  char key = readKeypad();
-  
-  if (key != '\0') {
-    Serial.print("Key pressed: ");
-    Serial.println(key);
+  char key = keypad.read();
+  // if (key != '\0') {
+  //   lcd.setCursor(1, 1);
+  //   lcd.print("Tombol ditekan: ");
+  //   lcd.print(key);
+  //   lcd.clear();
+  // }
 
-    // Tampilkan di LCD
-    lcd.setCursor(0, 1);
-    lcd.print("Pressed: ");
-    lcd.print(key);
-    lcd.print("    "); // Clear sisa karakter
+  if (keypad.key('1')) {
+    lcd.setCursor(1, 1);
+    lcd.print("Tombol '1' ditekan");
+    keypad.clearLastKey(); // reset agar tidak terus terbaca
   }
-  
-  delay(10);
+  if (keypad.key('2')) {
+    lcd.setCursor(1, 1);
+    lcd.print("Tombol '2' ditekan");
+    keypad.clearLastKey(); // reset agar tidak terus terbaca
+  }
+  if (keypad.key('3')) {
+    lcd.setCursor(1, 1);
+    lcd.print("Tombol '3' ditekan");
+    keypad.clearLastKey(); // reset agar tidak terus terbaca
+  }
+  if (keypad.key('4')) {
+    lcd.setCursor(1, 1);
+    lcd.print("Tombol '4' ditekan");
+    keypad.clearLastKey(); // reset agar tidak terus terbaca
+  }
 }
 
 // ==================================end of fungsi Debug==================================
@@ -411,27 +502,30 @@ void setup() {
   // inisiasi lcd
   lcd.init();
   
+  // inisiasia modul keypad sebelumnya
+  keypad.begin();
+
   // Inisialisasi PCF8575
   // dengan mengecek apa pcf terkoneksi kemudian beri output error
-  while (!pcf.begin()) {
-    lcd.clear();
-    lcd.setCursor(2, 1);
-    lcd.print("PCF8575 Error!");
-    delay(2000);
-  }
-  // Set semua pin kolom sebagai output HIGH (tidak aktif)
+  // while (!pcf.begin()) {
+  //   lcd.clear();
+  //   lcd.setCursor(2, 1);
+  //   lcd.print("PCF8575 Error!");
+  //   delay(2000);
+  // }
+  // inisiasi pin kolom sebagai output HIGH (tidak aktif)
   /* buat perulangan for dengen kondisi awal c = 0, ketika c kurang dari COLS, maka c +1 
      maka write pcf pin di colPin index 0 sebagai high
      iterasi sampai c=cols*/
-  for (byte c = 0; c < COLS; c++) {
-    pcf.write(colPins[c], HIGH);
-  }
-  // Set semua pin baris sebagai input (HIGH karena pull-up)
+  // for (byte c = 0; c < COLS; c++) {
+  //   pcf.write(colPins[c], HIGH);
+  // }
+  // inisiasi pin baris sebagai input (HIGH karena pull-up)
   /* buat iterasi +1 r sampai r = ROWS
   atur rowsPin[index-r] HIGH*/
-  for (byte r = 0; r < ROWS; r++) {
-    pcf.write(rowPins[r], HIGH);
-  }
+  // for (byte r = 0; r < ROWS; r++) {
+  //   pcf.write(rowPins[r], HIGH);
+  // }
 
   // inisiasi pin relay sebagai output
   pinMode(relayMain, OUTPUT);
@@ -454,9 +548,11 @@ void setup() {
 
 void loop() {
   // ==================================pemanggilan debug input==================================
-
   // testBtn();
   // cetakRfid();
   // testFinger();
-  // testKeypad();
+  testKeypad();
+  // ==================================end of pemanggilan debug input==================================
+
+
 }
