@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <Wire.h> 
 #include <LiquidCrystal_I2C.h>
 #include <SPI.h>
@@ -6,6 +7,7 @@
 #include <Adafruit_Fingerprint.h>
 #include <WiFi.h>
 #include <WiFiManager.h>  // oleh tzapu
+#include <Preferences.h>       // untuk penyimpanan token Blynk
 #define FINGERPRINT_LEDON           0x01
 #define FINGERPRINT_LEDOFF          0x02
 #define FINGERPRINT_LEDBREATHING    0x03
@@ -81,7 +83,7 @@ class Relay {
     const int relaySecond = 27;
 
   public:
-    // Constructor: set mode dan inisialisasi kondisi awal
+    // Constructor: set mode
     Relay() {
       pinMode(relayMain, OUTPUT);
       pinMode(relaySecond, OUTPUT);
@@ -146,9 +148,11 @@ class RFIDReader {
     const uint8_t RST_PIN = 5;
     MFRC522 rfid;
 
+    Display &lcd;
+
   public:
     // Constructor: inisialisasi objek MFRC522
-    RFIDReader() : rfid(SS_PIN, RST_PIN) {}
+    RFIDReader(Display &displayRef) : rfid(SS_PIN, RST_PIN), lcd(displayRef) {}
 
     // Inisialisasi modul RFID
     void begin() {
@@ -157,7 +161,7 @@ class RFIDReader {
     }
 
     // Fungsi untuk test dengan menampilkan ke LCD
-    void testRfid(Display &lcd) {
+    void testRfid() {
       lcd.clear();
       lcd.showMessage("Tempelkan Kartu:", 0, 0);
       delay(800);
@@ -226,9 +230,11 @@ class KeypadCustom {
 
     char lastKey = '\0';
 
+    Display &lcd; 
+
   public:
     // Constructor
-    KeypadCustom() : pcf(0x20) {}
+    KeypadCustom(Display &displayRef) : pcf(0x20), lcd(displayRef) {}
 
     // Inisialisasi PCF dan I/O
     void begin() {
@@ -278,7 +284,7 @@ class KeypadCustom {
     }
 
     // Method testKeypad: tampilkan tombol yang ditekan di Display
-    void testKeypad(Display &lcd) {
+    void testKeypad() {
       char key = read();
       if (key != '\0') {
         lcd.clear();
@@ -292,7 +298,7 @@ class FingerprintSensor {
   private:
     HardwareSerial mySerial;
     Adafruit_Fingerprint finger;
-    Display &lcd;  // referensi ke display eksternal
+    Display &lcd;  
 
   public:
     // Constructor
@@ -307,7 +313,8 @@ class FingerprintSensor {
       if (finger.verifyPassword()) {
         lcd.showMessage("Sensor Finger OK", 0, 0);
       } else {
-        lcd.showMessage("Sensor Finger FAIL", 0, 0);
+        lcd.showMessage("Sensor Finger", 2, 0);
+        lcd.showMessage("FAIL", 6, 1);
       }
       delay(1500);
       lcd.clear();
@@ -472,68 +479,107 @@ class FingerprintSensor {
 class WiFiHandler {
   private:
     WiFiManager wm;
-    char blynkToken[34]; // Token maksimal 32 karakter + null
+    char blynkToken[34]; 
     WiFiManagerParameter custom_blynk;
+    Preferences prefs;
+    Display &lcd; 
 
   public:
     // Constructor
-    WiFiHandler() : custom_blynk("blynk", "Blynk Token", "", 33) {}
+    WiFiHandler(Display &displayRef) : custom_blynk("blynk", "Blynk Token", "", 33), lcd(displayRef) {}
 
     // Memulai koneksi dan menampilkan portal jika perlu
     void begin(const char* apName = "ESP32_Config", const char* apPassword = "12345678") {
+      // Tampilkan status awal ke LCD
+      lcd.clear();
+      lcd.showMessage("Mencoba koneksi", 0, 0);
+      lcd.showMessage("WiFi...", 0, 1);
+
       // Tambahkan parameter Blynk ke form konfigurasi
       wm.addParameter(&custom_blynk);
 
-      // Coba konek otomatis, jika gagal maka tampilkan portal
+      // Coba auto connect, jika gagal buka portal konfigurasi
       if (!wm.autoConnect(apName, apPassword)) {
-        Serial.println("Gagal konek ke WiFi");
+        lcd.clear();
+        lcd.showMessage("Koneksi Gagal!", 0, 0);
+        lcd.showMessage("Restarting...", 0, 1);
         delay(3000);
         ESP.restart();
       }
 
-      Serial.println("WiFi Terkoneksi.");
-      Serial.println("IP: " + WiFi.localIP().toString());
-
-      // Ambil input Blynk token dari form
+      // Jika berhasil terkoneksi
+      lcd.clear();
+      lcd.showMessage("WiFi Terkoneksi!", 0, 0);
+      lcd.showMessage(WiFi.localIP().toString(), 0, 1);
+      delay(2000);
+      lcd.clear();
+      
+      //  Simpan token ke preferences
       strncpy(blynkToken, custom_blynk.getValue(), sizeof(blynkToken));
-      Serial.println("Token Blynk: " + String(blynkToken));
+      prefs.begin("blynk", false);  // namespace = blynk
+      prefs.putString("token", blynkToken);
+      prefs.end();
+
+      Serial.println("Token Blynk disimpan: " + String(blynkToken));
     }
 
-    // Mendapatkan token Blynk
+    // Ambil token dari preferences
     String getBlynkToken() {
-      return String(blynkToken);
+      prefs.begin("blynk", true);  // read-only
+      String token = prefs.getString("token", "");
+      prefs.end();
+      return token;
     }
 
     // Cek status koneksi WiFi
     bool isConnected() {
       return WiFi.status() == WL_CONNECTED;
-    }
-
-    // Reset konfigurasi WiFi & token
-    void resetSettings() {
-      wm.resetSettings();     // Hapus kredensial yang tersimpan
-      delay(1000);
-      ESP.restart();
+      lcd.clear();
+      lcd.showMessage("Status WiFi:", 0, 0);
+      lcd.showMessage(WiFi.status() == WL_CONNECTED ? "Terkoneksi" : "Tidak Terkoneksi", 0, 1);
+      delay(2000);
+      lcd.clear();
     }
 
     // Menampilkan SSID yang terkoneksi
-    String getSSID() {
-      return WiFi.SSID();
+    void getSSID() {
+      // return WiFi.SSID();
+      lcd.clear();
+      lcd.showMessage("SSID: " + WiFi.SSID(), 0, 0);
+      delay(2000);
+      lcd.clear();
     }
 
     // Menampilkan IP saat ini
     String getIP() {
       return WiFi.localIP().toString();
     }
+
+    // Reset semua pengaturan WiFi & token Blynk
+    void resetSettings() {
+      wm.resetSettings(); // reset kredensial WiFi
+
+      // Hapus token dari preferences
+      prefs.begin("blynk", false);
+      prefs.clear(); // hapus semua key di namespace blynk
+      prefs.end();
+
+      lcd.clear();
+      lcd.showMessage("Pengaturan WiFi", 0, 0);
+      lcd.showMessage("direset, restart", 0, 1);
+      delay(2000);
+      lcd.clear();
+      ESP.restart();
+    }
 };
 
 // --- Deklarasi objek secara global ---
 Display myDisplay;
 Relay doorRelay;
-RFIDReader myRfid;
-KeypadCustom keypad;
+RFIDReader myRfid(myDisplay);
+KeypadCustom keypad(myDisplay);
 FingerprintSensor fp(myDisplay);
-WiFiHandler wifi;
+WiFiHandler wifi(myDisplay);
 
 void setup() {
   Serial.begin(115200);
@@ -541,37 +587,45 @@ void setup() {
   myRfid.begin();
   keypad.begin();
   fp.begin();
-  fp.printTemplateCount();
-  // wifi.begin(); // akan otomatis connect atau buka portal config
-  // String token = wifi.getBlynkToken();
+  wifi.begin();
 
-  // myDisplay.testLcd();
-  // doorRelay.testRelay();
 }
 
 void loop() {
-  myRfid.testRfid(myDisplay);
 
-  // char key = keypad.read();
-  // if (key == '1') {
-  //   fp.enrollFingerSecure(1); 
-  // } if (key == '2') {
+  char key = keypad.read();
+  if (key == '1') {
+    // fp.enrollFingerSecure(1); 
+    wifi.getSSID(); // tampilkan SSID yang terkoneksi
+  } 
+  //if (key == '2') {
   //   fp.enrollFingerSecure(2); 
-  // } if (key == '3') {
+  // } 
+  // if (key == '3') {
   //   fp.enrollFingerSecure(3); 
-  // } if (key == '4') {
+  // } 
+  // if (key == '4') {
   //   fp.enrollFingerSecure(4); 
-  // } if (key == '5') {
+  // } 
+  // if (key == '5') {
   //   fp.printTemplateCount(); 
-  // } if (key == '6') {
+  // } 
+  // if (key == '6') {
   //   fp.testMatch();
-  // } if (key == '7') {
+  // } 
+  // if (key == '7') {
   //   fp.readID();
-  // } if (key == '8') {
+  // } 
+  // if (key == '8') {
   //   fp.testCapture();
-  // } if (key == '*') {
-  //   fp.deleteAll();
-  // }
+  // } 
+  // if (key == '9') {
+  //   fp.testCapture();
+  // } 
+  if (key == '*') {
+    // fp.deleteAll();
+    wifi.resetSettings(); // reset WiFi settings
+  }
   // int id = fp.readID();
   // if (id >= 1) {
   //   doorRelay.activateAll();
