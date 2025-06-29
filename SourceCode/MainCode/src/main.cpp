@@ -6,18 +6,18 @@
 #include <PCF8575.h>
 #include <Adafruit_Fingerprint.h>
 #include <WiFi.h>
-#include <WiFiManager.h>  // oleh tzapu
-#include <Preferences.h>       // untuk penyimpanan token Blynk
-#define FINGERPRINT_LEDON           0x01
-#define FINGERPRINT_LEDOFF          0x02
-#define FINGERPRINT_LEDBREATHING    0x03
-#define FINGERPRINT_LEDRED          0x04
-#define FINGERPRINT_LEDGREEN        0x05
-#define FINGERPRINT_LEDBLUE         0x06
-#define FINGERPRINT_LEDYELLOW       0x07
-#define FINGERPRINT_LEDCYAN         0x08
-#define FINGERPRINT_LEDMAGENTA      0x09
-#define FINGERPRINT_LEDWHITE        0x0A
+#include <WiFiManager.h> 
+#include <Preferences.h>      
+// #define FINGERPRINT_LEDON           0x01
+// #define FINGERPRINT_LEDOFF          0x02
+// #define FINGERPRINT_LEDBREATHING    0x03
+// #define FINGERPRINT_LEDRED          0x04
+// #define FINGERPRINT_LEDGREEN        0x05
+// #define FINGERPRINT_LEDBLUE         0x06
+// #define FINGERPRINT_LEDYELLOW       0x07
+// #define FINGERPRINT_LEDCYAN         0x08
+// #define FINGERPRINT_LEDMAGENTA      0x09
+// #define FINGERPRINT_LEDWHITE        0x0A
 
 class Display {
   private:
@@ -144,6 +144,8 @@ class Relay {
 
 class RFIDReader {
   private:
+    Preferences prefs;
+  
     const uint8_t SS_PIN  = 15;
     const uint8_t RST_PIN = 5;
     MFRC522 rfid;
@@ -158,6 +160,7 @@ class RFIDReader {
     void begin() {
       SPI.begin(18, 19, 23, SS_PIN); // SCK, MISO, MOSI, SS
       rfid.PCD_Init();
+      prefs.begin("rfid_db", false); // namespace "rfid_db", R/W mode
     }
 
     // Fungsi untuk test dengan menampilkan ke LCD
@@ -190,27 +193,131 @@ class RFIDReader {
       delay(1500);
     }
 
-    // Ambil UID kartu sebagai String (tanpa LCD)
-    String readUID() {
-      if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return "";
-
-      String uidString = "";
-      for (byte i = 0; i < rfid.uid.size; i++) {
-        if (rfid.uid.uidByte[i] < 0x10) uidString += "0";
-        uidString += String(rfid.uid.uidByte[i], HEX);
-        if (i < rfid.uid.size - 1) uidString += " ";
-      }
-
-      rfid.PICC_HaltA();
-      rfid.PCD_StopCrypto1();
-      return uidString;
-    }
-
     // Cek apakah kartu ada
     bool isCardPresent() {
       return rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial();
     }
-};
+
+    void saveUID(int id) {
+      lcd.clear();
+      lcd.showMessage("Tempelkan Kartu", 0, 0);
+      delay(500);
+
+      unsigned long startTime = millis();
+      String uid = "";
+
+      while (millis() - startTime < 800) {
+        if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+          for (byte i = 0; i < rfid.uid.size; i++) {
+            if (rfid.uid.uidByte[i] < 0x10) uid += "0";
+            uid += String(rfid.uid.uidByte[i], HEX);
+          }
+
+          rfid.PICC_HaltA();
+          rfid.PCD_StopCrypto1();
+          break; // kartu terbaca, keluar dari loop
+        }
+      }
+
+      if (uid == "") {
+        lcd.clear();
+        lcd.showMessage("Gagal baca kartu", 0, 0);
+        delay(1500);
+        lcd.clear();
+        return;
+      }
+
+      String key = "id" + String(id);
+      String existingUid = prefs.getString(key.c_str(), "");
+      
+      // Cek apakah ID sudah dipakai
+      if (existingUid != "") {
+        lcd.clear();
+        lcd.showMessage("ID sudah dipakai", 0, 0);
+        delay(1500);
+        lcd.clear();
+        return;
+      }
+
+      // Cek apakah UID sudah pernah tersimpan di ID manapun
+      for (int i = 1; i <= 100; i++) {
+        String tempKey = "id" + String(i);
+        String stored = prefs.getString(tempKey.c_str(), "");
+        if (stored == uid) {
+          lcd.clear();
+          lcd.showMessage("UID sudah terdaftar", 0, 0);
+          delay(1500);
+          lcd.clear();
+          return;
+        }
+      }
+
+      prefs.putString(key.c_str(), uid);
+      lcd.clear();
+      lcd.showMessage("UID tersimpan", 0, 0);
+      lcd.showMessage("ID: " + String(id), 0, 1);
+      delay(1500);
+      lcd.clear();
+    }
+
+    void deleteUID(int id) {
+      String key = "id" + String(id);
+      prefs.remove(key.c_str());
+      lcd.clear();
+      lcd.showMessage("UID dihapus", 0, 0);
+      delay(1500);
+    }
+
+    String getUIDById(int id) {
+      String key = "id" + String(id);
+      return prefs.getString(key.c_str(), "");
+    }
+
+    int matchUID(const String& uid) {
+      for (int id = 1; id <= 100; id++) {
+        String key = "id" + String(id);
+        String storedUid = prefs.getString(key.c_str());
+        if (storedUid == uid) {
+          return id;
+        }
+      }
+      return -1;
+    }
+
+    void listAllUIDs() {
+      lcd.clear();
+      for (int id = 1; id <= 10; id++) {
+        String uid = getUIDById(id);
+        if (uid != "") {
+          Serial.print("ID ");
+          Serial.print(id);
+          Serial.print(": ");
+          Serial.println(uid);
+        }
+      }
+    }
+    
+    void deleteAllUIDs() {
+      lcd.clear();
+      lcd.showMessage("Menghapus semua UID", 0, 0);
+      delay(1000);
+
+      for (int id = 1; id <= 100; id++) {
+        String key = "id" + String(id);
+        prefs.remove(key.c_str());
+      }
+
+      lcd.clear();
+      lcd.showMessage("Semua UID dihapus", 0, 0);
+      delay(1500);
+      lcd.clear();
+    }
+
+    void end() {
+      prefs.end();
+    }
+
+  };
 
 class KeypadCustom {
   private:
@@ -551,8 +658,12 @@ class WiFiHandler {
     }
 
     // Menampilkan IP saat ini
-    String getIP() {
-      return WiFi.localIP().toString();
+    void getIP() {
+      // return WiFi.localIP().toString();
+      lcd.clear();
+      lcd.showMessage("IP: " + WiFi.localIP().toString(), 0, 0);
+      delay(2000);
+      lcd.clear();
     }
 
     // Reset semua pengaturan WiFi & token Blynk
@@ -586,9 +697,8 @@ void setup() {
   myDisplay.begin();  
   myRfid.begin();
   keypad.begin();
-  fp.begin();
-  wifi.begin();
-
+  // fp.begin();
+  // wifi.begin();
 }
 
 void loop() {
@@ -596,36 +706,45 @@ void loop() {
   char key = keypad.read();
   if (key == '1') {
     // fp.enrollFingerSecure(1); 
-    wifi.getSSID(); // tampilkan SSID yang terkoneksi
+    // wifi.getSSID(); 
+    int id = String(key).toInt();
+    myRfid.saveUID(id);
   } 
-  //if (key == '2') {
-  //   fp.enrollFingerSecure(2); 
-  // } 
-  // if (key == '3') {
-  //   fp.enrollFingerSecure(3); 
-  // } 
-  // if (key == '4') {
-  //   fp.enrollFingerSecure(4); 
-  // } 
-  // if (key == '5') {
-  //   fp.printTemplateCount(); 
-  // } 
-  // if (key == '6') {
-  //   fp.testMatch();
-  // } 
-  // if (key == '7') {
-  //   fp.readID();
-  // } 
-  // if (key == '8') {
-  //   fp.testCapture();
-  // } 
-  // if (key == '9') {
-  //   fp.testCapture();
-  // } 
+  if (key == '2') {
+    // fp.enrollFingerSecure(2); 
+    // wifi.getIP(); 
+    int id = String(key).toInt();
+    myRfid.saveUID(id);
+  } 
+  if (key == '3') {
+    // fp.enrollFingerSecure(3); 
+  } 
+  if (key == '4') {
+    // fp.enrollFingerSecure(4); 
+  } 
+  if (key == '5') {
+    // fp.printTemplateCount(); 
+    myRfid.listAllUIDs();
+  } 
+  if (key == '6') {
+    // fp.testMatch();
+  } 
+  if (key == '7') {
+    // fp.readID();
+  } 
+  if (key == '8') {
+    // fp.testCapture();
+  } 
+  if (key == '9') {
+    // fp.testCapture();
+  } 
   if (key == '*') {
     // fp.deleteAll();
-    wifi.resetSettings(); // reset WiFi settings
+    // wifi.resetSettings(); // reset WiFi settings
+    myRfid.deleteAllUIDs(); // hapus semua UID
   }
+
+  
   // int id = fp.readID();
   // if (id >= 1) {
   //   doorRelay.activateAll();
