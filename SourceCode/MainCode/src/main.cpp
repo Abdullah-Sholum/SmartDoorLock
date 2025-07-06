@@ -22,6 +22,9 @@
 // #define FINGERPRINT_LEDMAGENTA      0x09
 // #define FINGERPRINT_LEDWHITE        0x0A
 
+// variabel global
+PCF8575 pcf(0x26); 
+
 class Display {
   private:
     LiquidCrystal_I2C lcd;  // objek LCD sebagai anggota class
@@ -147,7 +150,7 @@ class RelayHandler {
 
 class KeypadHandler {
   private:
-    PCF8575 pcf;
+    PCF8575 &pcf;
     const byte ROWS = 4;
     const byte COLS = 3;
 
@@ -162,12 +165,11 @@ class KeypadHandler {
     byte colPins[3] = {6, 5, 4};     // Kolom = output
 
     char lastKey = '\0';
-
     Display &lcd; 
 
   public:
     // Constructor
-    KeypadHandler(Display &displayRef) : pcf(0x24), lcd(displayRef) {}
+    KeypadHandler(Display &displayRef, PCF8575 &pcf) : pcf(pcf), lcd(displayRef) {}
 
     // Inisialisasi PCF dan I/O
     void begin() {
@@ -577,6 +579,11 @@ class FingerprintSensor {
       lcd.clear();
     }
 
+    // Method untuk mengecek apakah sidik jari sudah terdaftar
+    bool isFingerprintRegistered(uint8_t id) {
+      return finger.loadModel(id) == FINGERPRINT_OK;
+    }
+
     // Method cek jumlah template
     void printTemplateCount() {
       finger.getTemplateCount();
@@ -605,6 +612,57 @@ class FingerprintSensor {
       delay(2000);
       lcd.clear();
     }
+};
+
+class IOHandler {
+  private:
+    PCF8575 &pcf;
+    KeypadHandler &keypad;
+    Display &lcd;
+    const uint8_t BUZZER_PIN = 7;     // PCF8575 pin
+    const uint8_t BUTTON_PIN = 25;    // ESP32 pin
+
+    unsigned long lastDebounceTime = 0;
+    const unsigned long debounceDelay = 50;
+    bool lastButtonState = HIGH;
+    bool buttonState = HIGH;
+    bool buttonHandled = false;
+
+  public:
+    IOHandler(PCF8575 &pcf, KeypadHandler &keypad, Display &lcd) : pcf(pcf), keypad(keypad), lcd(lcd) {}
+
+    void begin() {
+      pcf.write(BUZZER_PIN, HIGH); // Default mati
+      pinMode(BUTTON_PIN, INPUT_PULLUP);
+    }
+
+    void buzzOn() {
+      pcf.write(BUZZER_PIN, LOW);
+    }
+
+    void buzzOff() {
+      pcf.write(BUZZER_PIN, HIGH);
+    }
+
+    void handleButton(std::function<void()> onClick) {
+      int reading = digitalRead(BUTTON_PIN);
+
+      if (reading != lastButtonState) {
+        lastDebounceTime = millis();
+        buttonHandled = false;
+      }
+
+      if ((millis() - lastDebounceTime) > debounceDelay) {
+        if (reading == LOW && !buttonHandled) {
+          onClick();            // Trigger fungsi callback
+          buttonHandled = true;
+        }
+      }
+
+      lastButtonState = reading;
+    }
+
+
 };
 
 class WiFiHandler { 
@@ -805,23 +863,32 @@ class AccessManager {
     KeypadHandler &keypad;
     RelayHandler &rel;
     WiFiHandler &wifi;
+    IOHandler io;
     Preferences prefs;
     
+    // Admin mode logic
     bool adminRegistered = false;
     unsigned long lastAdminInputTime = 0;
     const unsigned long adminTimeout = 10000; // 10 detik
 
+    // Relay handler logic
+    bool isRelayHandlerActive = false;
+    unsigned long relayStartTime = 0;
+    unsigned long relayDuration = 3000;  // default 3 detik
+    
   public:
     // Constructor
-    AccessManager(Display &d, FingerprintSensor &f, RFIDHandler &r, KeypadHandler &k, RelayHandler &rel, WiFiHandler &w)
-      : lcd(d), fp(f), rfid(r), keypad(k), rel(rel), wifi(w) {}
+    AccessManager(Display &d, FingerprintSensor &f, RFIDHandler &r, KeypadHandler &k, RelayHandler &rel, WiFiHandler &w, IOHandler &io)
+      : lcd(d), fp(f), rfid(r), keypad(k), rel(rel), wifi(w), io(io) {}
 
+    // method untuk memulai AccessManager
     void begin() {
       prefs.begin("access", false);
-      adminRegistered = prefs.getBool("admin_ok", false);
+      adminRegistered = prefs.getBool("admin_ok", false) && fp.isFingerprintRegistered(0);
       prefs.end();
     }
 
+    // method loop
     void loop() {
       if (currentMode == ADMIN) {
         adminModeLoop();  // Mode admin aktif
@@ -843,10 +910,13 @@ class AccessManager {
           // Mode user biasa
           fingerSecurity();
           rfidSecurity();
+          handlePhysicalButton(); 
         }
       }
+      monitorRelayTimeout();
     }
 
+    // method untuk mengelola masuk admin mode
     void handleZeroKey() {
       String pin = "";
       while (pin.length() < 4) {
@@ -858,15 +928,22 @@ class AccessManager {
 
       if (pin == "0000") {
         lcd.clear();
-        lcd.showMessage("Tempelkan jari", 0, 0);
-        lcd.showMessage("admin...", 0, 1);
+        lcd.showMessage("Memeriksa admin...", 0, 0);
         delay(1000);
 
         prefs.begin("access", true);
         bool isAdminRegistered = prefs.getBool("admin_ok", false);
         prefs.end();
 
-        if (!isAdminRegistered) {
+        bool fingerExist = fp.isFingerprintRegistered(0); // CEK REAL DATA
+
+        if (!isAdminRegistered || !fingerExist) {
+          // Reset flag jika ada inkonsistensi
+          prefs.begin("access", false);
+          prefs.putBool("admin_ok", false);
+          prefs.end();
+
+          // Daftarkan admin
           lcd.clear();
           lcd.showMessage("Daftar Jari Admin", 0, 0);
           delay(1000);
@@ -879,117 +956,37 @@ class AccessManager {
           lcd.clear();
           lcd.showMessage("Admin Disimpan", 0, 0);
           delay(1500);
+          lcd.clear();
+          currentMode = STANDBY;  // Kembali ke mode standby
+        }
+
+        // Jika admin valid → verifikasi
+        lcd.clear();
+        lcd.showMessage("Verifikasi Jari...", 0, 0);
+        delay(1000);
+
+        int id = fp.readIDStatus();
+        if (id == 0) {
+          currentMode = ADMIN;
+          lastAdminInputTime = millis();
+          lcd.clear();
+          lcd.showMessage("Mode Admin Aktif", 0, 0);
+          delay(2000);
         } else {
           lcd.clear();
-          lcd.showMessage("Verifikasi Jari...", 0, 0);
-          delay(1000);
-
-          int id = fp.readIDStatus();
-          if (id == 0) {
-            currentMode = ADMIN;
-            lastAdminInputTime = millis();
-            lcd.clear();
-            lcd.showMessage("Mode Admin Aktif", 0, 0);
-            delay(2000);
-          } else {
-            lcd.clear();
-            lcd.showMessage("Jari Salah", 0, 0);
-            delay(1500);
-          }
-        }
-      } else {
-        lcd.clear();
-        lcd.showMessage("PIN Salah!", 0, 0);
-        delay(1500);
-      }
-
-      lcd.clear();
-    }
- 
-    void fingerSecurity() {
-      int id = fp.readIDStatus();
-
-      if (id >= 0) {
-        lcd.showMessage("Terdeteksi ID: " + String(id), 0, 0);
-        rel.activateMain();
-        delay(2000);
-        rel.deactivateMain();
-        lcd.clear();
-      }
-      else if (id == -1) {
-        lcd.showMessage("Sidik Jari tidak", 0, 0);
-        lcd.showMessage("terdaftar", 0, 1);
-        delay(1500);
-        lcd.clear();
-      }
-    }
-
-    void rfidSecurity() {
-      String uid = "";
-      int id = rfid.checkUIDAndGetID(uid);
-
-      // Tidak ada kartu → tidak lakukan apa pun
-      if (id == -1) return;
-
-      // Kartu tidak terdaftar
-      if (id == 0) {
-        lcd.clear();
-        lcd.showMessage("Kartu tidak", 0, 0);
-        lcd.showMessage("terdaftar!", 0, 1);
-        delay(1500);
-        lcd.clear();
-        return;
-      }
-
-      // Kartu terdaftar → minta PIN
-      lcd.clear();
-      lcd.showMessage("Masukkan PIN:", 0, 0);
-      String inputPin = "";
-
-      unsigned long startTime = millis();
-      const unsigned long timeout = 5000; // 5 detik
-
-      while (inputPin.length() < 4) {
-        char key = keypad.read();
-        if (key >= '0' && key <= '9') {
-          inputPin += key;
-          String mask = "";
-          for (int i = 0; i < inputPin.length(); i++) mask += "*";
-          lcd.showMessage(mask, 0, 1);
-        }
-
-        // Cek timeout
-        if (millis() - startTime > timeout) {
-          lcd.clear();
-          lcd.showMessage("Timeout PIN", 0, 0);
+          lcd.showMessage("Jari Salah", 0, 0);
           delay(1500);
-          lcd.clear();
-          return;
         }
-      }
-
-      // Ambil dari prefs dalam class
-      String storedPin = rfid.getStoredPIN(id);
-      inputPin.trim();
-      storedPin.trim();
-
-      if (inputPin == storedPin) {
-        // Akses diberikan
-        lcd.clear();
-        lcd.showMessage("Akses Diberikan", 0, 0);
-        rel.activateAll(); // RelayHandler aktif
-        delay(2000);
-        rel.deactivateAll();
-        lcd.clear();
       } else {
-        // PIN salah
         lcd.clear();
         lcd.showMessage("PIN Salah!", 0, 0);
         delay(1500);
-        lcd.clear();
       }
+
+      lcd.clear();
     }
 
+    // Method untuk mengelola mode admin
     void adminModeLoop() {
       char key = keypad.read();
       if (key >= '1' && key <= '6') {
@@ -997,18 +994,42 @@ class AccessManager {
         int index = String(key).toInt();
         manageUser(index);
       } else if (key == '*') {
-        lastAdminInputTime = millis();
-        int id = fp.readIDStatus();
-        if (id == 0) {
-          lcd.showMessage("Reset Sistem...", 0, 0);
-          fp.deleteAll();
-          rfid.deleteAll();
-          wifi.resetSettings();
-          prefs.begin("access", false);
-          prefs.putBool("admin_ok", false);
-          prefs.end();
-          delay(2000);
-          ESP.restart();
+          lastAdminInputTime = millis();
+
+          lcd.clear();
+          lcd.showMessage("Tempelkan jari", 0, 0);
+          lcd.showMessage("admin untuk reset", 0, 1);
+
+          unsigned long start = millis();
+          int id = -1;
+          bool success = false;
+
+          // Tunggu hingga 2 detik untuk membaca sidik jari
+          while (millis() - start < 2000) {
+            id = fp.readIDStatus();
+            if (id == 0) {
+              success = true;
+              break;
+            }
+          }
+
+          if (success) {
+            lcd.clear();
+            lcd.showMessage("Reset Sistem...", 0, 0);
+
+            fp.deleteAll();
+            rfid.deleteAll();
+            wifi.resetSettings();
+
+            // Reset flag admin di Preferences
+            prefs.begin("access", false);
+            prefs.clear();
+            prefs.end();
+
+            lcd.showMessage("Sistem direset", 0, 1);
+            delay(2000);
+            lcd.clear();
+            ESP.restart();
         } else {
           lcd.showMessage("Admin Gagal", 0, 1);
           delay(1500);
@@ -1023,6 +1044,7 @@ class AccessManager {
       }
     }
 
+    // Method Admin untuk mengelola pengguna berdasarkan
     void manageUser(int index) {
       lcd.clear();
       String method = rfid.getMethod(index);
@@ -1086,6 +1108,126 @@ class AccessManager {
       lcd.clear();
     }
 
+    void activateRelayWithTimeout(unsigned long duration = 3000) {
+      rel.activateAll();
+      relayStartTime = millis();
+      lcd.clear();
+      lcd.showMessage("Unlocked", 0, 0);
+      delay(3000);
+      relayDuration = duration;
+      isRelayHandlerActive = true;
+    }
+
+    void monitorRelayTimeout() {
+      if (isRelayHandlerActive && millis() - relayStartTime >= relayDuration) {
+        rel.deactivateSecond();
+        delay(500);  
+        rel.deactivateMain();
+        lcd.clear();
+        lcd.showMessage("Locked", 0, 0);
+        delay(1500);
+        lcd.clear();
+        isRelayHandlerActive = false;
+      }
+    }
+
+    void blynkAccess() {
+      if (!isRelayHandlerActive) {
+        lcd.clear();
+        lcd.showMessage("Akses Blynk", 0, 0);
+        activateRelayWithTimeout(5000);  // Contoh: 5 detik
+      }
+    }
+
+    // Method untuk menangani keamanan sidik jari
+    void fingerSecurity() {
+      int id = fp.readIDStatus();
+
+      if (id >= 0) {
+        lcd.showMessage("Terdeteksi ID: " + String(id), 0, 0);
+        activateRelayWithTimeout(5000);
+        lcd.clear();
+      }
+      else if (id == -1) {
+        lcd.showMessage("Sidik Jari tidak", 0, 0);
+        lcd.showMessage("terdaftar", 0, 1);
+        delay(1500);
+        lcd.clear();
+      }
+    }
+    
+    // Method untuk menangani keamanan RFID
+    void rfidSecurity() {
+      String uid = "";
+      int id = rfid.checkUIDAndGetID(uid);
+
+      // Tidak ada kartu → tidak lakukan apa pun
+      if (id == -1) return;
+
+      // Kartu tidak terdaftar
+      if (id == 0) {
+        lcd.clear();
+        lcd.showMessage("Kartu tidak", 0, 0);
+        lcd.showMessage("terdaftar!", 0, 1);
+        delay(1500);
+        lcd.clear();
+        return;
+      }
+
+      // Kartu terdaftar → minta PIN
+      lcd.clear();
+      lcd.showMessage("Masukkan PIN:", 0, 0);
+      String inputPin = "";
+
+      unsigned long startTime = millis();
+      const unsigned long timeout = 5000; // 5 detik
+
+      while (inputPin.length() < 4) {
+        char key = keypad.read();
+        if (key >= '0' && key <= '9') {
+          inputPin += key;
+          String mask = "";
+          for (int i = 0; i < inputPin.length(); i++) mask += "*";
+          lcd.showMessage(mask, 0, 1);
+        }
+
+        // Cek timeout
+        if (millis() - startTime > timeout) {
+          lcd.clear();
+          lcd.showMessage("Timeout PIN", 0, 0);
+          delay(1500);
+          lcd.clear();
+          return;
+        }
+      }
+
+      // Ambil dari prefs dalam class
+      String storedPin = rfid.getStoredPIN(id);
+      inputPin.trim();
+      storedPin.trim();
+
+      if (inputPin == storedPin) {
+        // Akses diberikan
+        lcd.clear();
+        lcd.showMessage("Akses Diberikan", 0, 0);
+        activateRelayWithTimeout(5000);
+        lcd.clear();
+      } else {
+        // PIN salah
+        lcd.clear();
+        lcd.showMessage("PIN Salah!", 0, 0);
+        delay(1500);
+        lcd.clear();
+      }
+    }
+
+    // Method untuk menangani tombol fisik
+    void handlePhysicalButton() {
+      io.handleButton([&]() {
+        activateRelayWithTimeout(5000);
+      });
+    }
+
     String waitForPIN() {
       String pin = "";
       while (pin.length() < 4) {
@@ -1103,45 +1245,43 @@ class AccessManager {
     }
 };
 
-
-// variabel global untuk RelayHandler
-bool isRelayHandlerActive = false;
-unsigned long RelayHandlerStartTime = 0;
-const unsigned long RelayHandlerDuration = 5000; // 5 detik
-
 // --- Deklarasi objek secara global ---
 Display lcd;
 RelayHandler doorRelayHandler;
-KeypadHandler keypad(lcd);
+KeypadHandler keypad(lcd, pcf);
 RFIDHandler myRfid(lcd, keypad);
 FingerprintSensor fp(lcd);
+IOHandler ioHandler(pcf, keypad, lcd);
 WiFiHandler wifi(lcd);
 TimeHandler timeHandler(lcd);
-AccessManager accessManager(lcd, fp, myRfid, keypad, doorRelayHandler, wifi);
+AccessManager accessManager(lcd, fp, myRfid, keypad, doorRelayHandler, wifi, ioHandler);
 
-
+// akses via Blynk
 BLYNK_WRITE(V0) {
-  if (param.asInt() == 1 && !isRelayHandlerActive) {
-    lcd.clear();
-    lcd.showMessage("Akses via Blynk", 0, 0);
+  accessManager.blynkAccess();
+}
 
-    doorRelayHandler.activateAll();
-    RelayHandlerStartTime = millis();   // Catat waktu mulai
-    isRelayHandlerActive = true;        // Aktifkan flag
+void res() {
+  Preferences prefs;
+  char key = keypad.read();
+  if (key == '1') {
+    lcd.clear();
+    lcd.showMessage("Reset Sistem...", 0, 0);
+    fp.deleteAll();
+    myRfid.deleteAll();
+    wifi.resetSettings();
+    // Reset flag admin di Preferences
+    prefs.begin("access", false);
+    prefs.putBool("admin_ok", false);
+    prefs.end();
+    accessManager.begin();  // Reinitialize AccessManager
+    lcd.showMessage("Sistem direset", 0, 1);
+    delay(2000);
+    lcd.clear();
+    ESP.restart();  
   }
 }
 
-void monitorRelayHandler() {
-  if (isRelayHandlerActive && millis() - RelayHandlerStartTime >= RelayHandlerDuration) {
-    doorRelayHandler.deactivateAll();
-    lcd.clear();
-    lcd.showMessage("Relay Off", 0, 0);
-    delay(1500);
-    lcd.clear();
-
-    isRelayHandlerActive = false; // Reset flag
-  }
-}
 
 void setup() {
   // Inisialisasi semua komponen
@@ -1153,13 +1293,13 @@ void setup() {
   wifi.beginBlynk();
   myRfid.begin();
   fp.begin();
-  // timeHandler.begin();
-
+  ioHandler.begin(); 
+  timeHandler.begin();
   accessManager.begin();
 }
 
-void loop() 
+void loop() {
   Blynk.run();
   accessManager.loop();
-  monitorRelayHandler();
+  // res();  // Cek reset sistem via keypad
 }

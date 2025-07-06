@@ -1,3 +1,15 @@
 {
-  "cmake.sourceDirectory": "E:/6#Kerjaan/2-Client Enki-IOT doorlock/SourceCode/MainCode/lib/WiFiManager"
+  "cmake.sourceDirectory": "E:/6#Kerjaan/2-Client Enki-IOT doorlock/SourceCode/MainCode/lib/WiFiManager",
+  "files.associations": {
+    "*.embeddedhtml": "html",
+    "vector": "cpp",
+    "deque": "cpp",
+    "string": "cpp",
+    "unordered_map": "cpp",
+    "unordered_set": "cpp",
+    "system_error": "cpp",
+    "array": "cpp",
+    "string_view": "cpp",
+    "initializer_list": "cpp"
+  }
 }

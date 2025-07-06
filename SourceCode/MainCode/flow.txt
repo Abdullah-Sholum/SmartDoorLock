@@ -1,7 +1,0 @@
-kemudian untuk mengganti method 
-rfid.setMethod(index, "rfid") &
-rfid.getMethod(index) &
- menggunakan method yang mana untuk refaktor baru
-
- refaktor metho get & set untuk tiap id, karena aku ingin membedakan tiap id dengan methode yang berbeda.|
- serta untuk method ini apa tidak seharusnya dibuat di class Rfid? bukan accessManage 
