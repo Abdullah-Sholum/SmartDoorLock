@@ -23,11 +23,38 @@
 // #define FINGERPRINT_LEDWHITE        0x0A
 
 // variabel global
-PCF8575 pcf(0x26); 
+PCF8575 pcf(0x24); 
 
 class Display {
   private:
     LiquidCrystal_I2C lcd;  // objek LCD sebagai anggota class
+
+    bool busy = false;
+    unsigned long lastWriteTime = 0;
+    const unsigned long busyDuration = 3000;
+
+    byte lockChar[8] = {
+      B01110,
+      B10001,
+      B10001,
+      B11111,
+      B11011,
+      B11011,
+      B11111,
+      B00000
+    };
+
+    byte unlockChar[8] = {
+      B01110,
+      B10001,
+      B00001,
+      B01111,
+      B11011,
+      B11011,
+      B11111,
+      B00000
+    };
+
 
   public:
     // Constructor: inisialisasi alamat I2C dan ukuran LCD
@@ -37,6 +64,9 @@ class Display {
     void begin() {
       lcd.init();
       lcd.backlight();
+      lcd.createChar(0, lockChar);
+      lcd.createChar(1, unlockChar);
+
     }
 
     // Method untuk pengujian LCD
@@ -77,9 +107,23 @@ class Display {
       lcd.print(message);
     }
 
+    void showLockIcon(uint8_t col, uint8_t row) {
+      lcd.setCursor(col, row);
+      lcd.write(byte(0));
+    }
+
+    void showUnlockIcon(uint8_t col, uint8_t row) {
+      lcd.setCursor(col, row);
+      lcd.write(byte(1));
+    }
+
     // Method untuk membersihkan layar
     void clear() {
       lcd.clear();
+    }
+    
+    bool isBusy() {
+      return busy && (millis() - lastWriteTime < busyDuration);
     }
 };
 
@@ -209,11 +253,36 @@ class KeypadHandler {
 
       return '\0';
     }
-
+    
     // Mengecek apakah tombol terakhir adalah karakter tertentu
     bool key(char c) {
       return lastKey == c;
     }
+
+     // Fungsi untuk membaca integer (0–99) dari keypad
+    int readIntFromKeypad(bool display, int col, int row) {
+      String input = "";
+        unsigned long startTime = millis();
+        const unsigned long timeout = 10000; // timeout 10 detik
+
+        while (millis() - startTime < timeout) {
+          char key = read(); // ini harus membaca tombol '0' hingga '9'
+          if (key >= '0' && key <= '9') {
+            input += key;
+
+            // tampilkan di layar saat user input
+            if (display) {
+              lcd.showMessage(input, col, row);
+            }
+
+            // jika sudah dua digit, hentikan
+            if (input.length() >= 2) break;
+          }
+        }
+
+        if (input.length() == 0) return -1;
+        return input.toInt();
+      }
 
     // Reset nilai lastKey
     void clearLastKey() {
@@ -662,7 +731,6 @@ class IOHandler {
       lastButtonState = reading;
     }
 
-
 };
 
 class WiFiHandler { 
@@ -811,6 +879,11 @@ class TimeHandler {
     const long gmtOffset_sec = 7 * 3600;  // GMT+7 WIB
     const int daylightOffset_sec = 0;
     Display &lcd;
+    Preferences prefs;
+
+    unsigned long lastUpdate = 0;
+    int lastDisplayedMinute = -1;
+
 
   public:
     // Constructor dengan referensi ke objek Display
@@ -834,24 +907,26 @@ class TimeHandler {
       }
     }
 
-    // Menampilkan waktu dan tanggal ke LCD
-    void showDateTime() {
+    void updateClock(bool lcdAvailable = true) {
+      if (!lcdAvailable) return;
+
+      unsigned long currentMillis = millis();
+      if (currentMillis - lastUpdate < 1000) return;  // Cek setiap 1 detik
+      lastUpdate = currentMillis;
+
       struct tm timeinfo;
       if (getLocalTime(&timeinfo)) {
-        char timeStr[16];
-        char dateStr[16];
-        strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-        strftime(dateStr, sizeof(dateStr), "%d/%m/%Y", &timeinfo);
-
-        lcd.clear();
-        lcd.showMessage(String(dateStr), 0, 0);
-        lcd.showMessage(String(timeStr), 0, 1);
-      } else {
-        lcd.clear();
-        lcd.showMessage("Gagal ambil waktu", 0, 0);
+        if (timeinfo.tm_min != lastDisplayedMinute) {
+          lastDisplayedMinute = timeinfo.tm_min;
+          char timeStr[6];
+          sprintf(timeStr, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+          lcd.showMessage(String(timeStr), 6, 0);
+          lcd.showLockIcon(8, 1);
+        }
       }
     }
-};
+
+  };
 
 class AccessManager {
   private:
@@ -863,6 +938,7 @@ class AccessManager {
     KeypadHandler &keypad;
     RelayHandler &rel;
     WiFiHandler &wifi;
+    TimeHandler &time;
     IOHandler io;
     Preferences prefs;
     
@@ -876,16 +952,23 @@ class AccessManager {
     unsigned long relayStartTime = 0;
     unsigned long relayDuration = 3000;  // default 3 detik
     
+    // Metode akses
+    bool isBusy = false;
+
+    int jamMalamMulai = 22; // default 16:00
+    int jamMalamSelesai = 5; // default 05:00
+
   public:
     // Constructor
-    AccessManager(Display &d, FingerprintSensor &f, RFIDHandler &r, KeypadHandler &k, RelayHandler &rel, WiFiHandler &w, IOHandler &io)
-      : lcd(d), fp(f), rfid(r), keypad(k), rel(rel), wifi(w), io(io) {}
+    AccessManager(Display &d, FingerprintSensor &f, RFIDHandler &r, KeypadHandler &k, RelayHandler &rel, WiFiHandler &w, TimeHandler &time, IOHandler &io)
+      : lcd(d), fp(f), rfid(r), keypad(k), rel(rel), wifi(w), time(time), io(io) {}
 
     // method untuk memulai AccessManager
     void begin() {
       prefs.begin("access", false);
       adminRegistered = prefs.getBool("admin_ok", false) && fp.isFingerprintRegistered(0);
       prefs.end();
+      loadJamMalamPrefs();
     }
 
     // method loop
@@ -908,14 +991,21 @@ class AccessManager {
           handleZeroKey();  // Masuk admin
         } else {
           // Mode user biasa
-          fingerSecurity();
-          rfidSecurity();
-          handlePhysicalButton(); 
+          isBusy = false;
+          
+          // Cek input dari metode akses
+          if (fingerSecurity()) isBusy = true;
+          if (rfidSecurity()) isBusy = true;
+          if (handlePhysicalButton()) isBusy = true;
+
+          // Tampilkan jam hanya jika LCD tidak sedang dipakai
+          time.updateClock(!isBusy);
         }
       }
       monitorRelayTimeout();
     }
 
+//---------Method Admin Operations----------------
     // method untuk mengelola masuk admin mode
     void handleZeroKey() {
       String pin = "";
@@ -988,12 +1078,25 @@ class AccessManager {
 
     // Method untuk mengelola mode admin
     void adminModeLoop() {
+
+        static bool firstEntry = true;
+        if (firstEntry) {
+          lcd.clear();
+          lcd.showMessage("1-6: User", 0, 0);
+          lcd.showMessage("7: Jam Malam", 0, 1);
+          firstEntry = false;
+        }
+
       char key = keypad.read();
       if (key >= '1' && key <= '6') {
         lastAdminInputTime = millis();
         int index = String(key).toInt();
         manageUser(index);
-      } else if (key == '*') {
+      } if (key == '7') {
+          firstEntry = true;
+          configureJamMalam();
+        } 
+      else if (key == '*') {
           lastAdminInputTime = millis();
 
           lcd.clear();
@@ -1044,34 +1147,78 @@ class AccessManager {
       }
     }
 
-    // Method Admin untuk mengelola pengguna berdasarkan
+    // Method Admin untuk mengelola pengguna
     void manageUser(int index) {
       lcd.clear();
       String method = rfid.getMethod(index);
+
       if (method != "none") {
         lcd.showMessage("ID " + String(index) + ": " + method, 0, 0);
         delay(1000);
 
         lcd.clear();
         lcd.showMessage("1:Ganti 2:Batalkan", 0, 0);
+        lcd.showMessage("3:Hapus", 0, 1);
+
         char decision = 0;
-        while (decision != '1' && decision != '2') {
+        while (decision != '1' && decision != '2' && decision != '3') {
           decision = keypad.read();
         }
+
         if (decision == '2') {
           lcd.clear();
-          lcd.showMessage("Pengaturan ", 0, 0);
-          lcd.showMessage("dibatalkan", 0, 1);
+          lcd.showMessage("Pengaturan", 0, 0);
+          lcd.showMessage("Dibatalkan", 0, 1);
           delay(1500);
           lcd.clear();
           return;
         }
+
+        if (decision == '3') {
+          lcd.clear();
+          lcd.showMessage("1:Hapus 2:Batalkan", 0, 0);
+          char confirm = 0;
+          while (confirm != '1' && confirm != '2') {
+            confirm = keypad.read();
+          }
+
+          if (confirm == '1') {
+            rfid.clearIndex(index);
+            fp.deleteFingerprint(index);
+            rfid.setMethod(index, "none");
+
+            lcd.clear();
+            lcd.showMessage("Data Dihapus", 0, 0);
+            delay(1500);
+            lcd.clear();
+            return;
+          } else {
+            lcd.clear();
+            lcd.showMessage("Penghapusan", 0, 0);
+            lcd.showMessage("Dibatalkan", 0, 1);
+            delay(1500);
+            lcd.clear();
+            return;
+          }
+        }
+
+        // Jika memilih GANTI
         lcd.clear();
-        lcd.showMessage("1: Finger", 0, 0);
-        lcd.showMessage("2: RFID+PIN", 0, 1);
+        lcd.showMessage("1:Finger 3:Batalkan", 0, 0);
+        lcd.showMessage("2:RFID+PIN", 0, 1);
+
         char methodKey = 0;
-        while (methodKey != '1' && methodKey != '2') {
+        while (methodKey != '1' && methodKey != '2' && methodKey != '3') {
           methodKey = keypad.read();
+        }
+
+        if (methodKey == '3') {
+          lcd.clear();
+          lcd.showMessage("Pengaturan", 0, 0);
+          lcd.showMessage("Dibatalkan", 0, 1);
+          delay(1500);
+          lcd.clear();
+          return;
         }
 
         rfid.clearIndex(index);
@@ -1084,13 +1231,25 @@ class AccessManager {
           rfid.enrollWithPIN(index);
           rfid.setMethod(index, "rfid");
         }
+
       } else {
+        // Saat belum terdaftar
         lcd.clear();
-        lcd.showMessage("1: Finger", 0, 0);
-        lcd.showMessage("2: RFID+PIN", 0, 1);
+        lcd.showMessage("1:Finger 3:Batalkan", 0, 0);
+        lcd.showMessage("2:RFID+PIN", 0, 1);
+
         char methodKey = 0;
-        while (methodKey != '1' && methodKey != '2') {
+        while (methodKey != '1' && methodKey != '2' && methodKey != '3') {
           methodKey = keypad.read();
+        }
+
+        if (methodKey == '3') {
+          lcd.clear();
+          lcd.showMessage("Pendaftaran", 0, 0);
+          lcd.showMessage("Dibatalkan", 0, 1);
+          delay(1500);
+          lcd.clear();
+          return;
         }
 
         if (methodKey == '1') {
@@ -1108,61 +1267,161 @@ class AccessManager {
       lcd.clear();
     }
 
+//---------method jam malam-------------------
+    int getCurrentHour() {
+      struct tm timeinfo;
+      if (getLocalTime(&timeinfo)) {
+        return timeinfo.tm_hour;
+      }
+      return -1; // gagal
+    }
+
+    bool isNightTime() {
+      int now = getCurrentHour();
+      if (now == -1) return false;  // Gagal mendapatkan waktu
+
+      if (jamMalamMulai > jamMalamSelesai) {
+        // Contoh: 16 sampai 5 (lewat tengah malam)
+        return (now >= jamMalamMulai || now < jamMalamSelesai);
+      } else {
+        // Contoh: 22 sampai 23
+        return (now >= jamMalamMulai && now < jamMalamSelesai);
+      }
+    }
+
+    void saveJamMalamPrefs() {
+      prefs.begin("access", false);
+      prefs.putInt("jam_mulai", jamMalamMulai);
+      prefs.putInt("jam_selesai", jamMalamSelesai);
+      prefs.end();
+    }
+
+    // method load jam malam
+    void loadJamMalamPrefs() {
+      prefs.begin("access", true);
+      jamMalamMulai = prefs.getInt("jam_mulai", 16); // default 16
+      jamMalamSelesai = prefs.getInt("jam_selesai", 5); // default 5
+      prefs.end();
+    }
+    
+    // method mengatur jam malam
+    void configureJamMalam() {
+      lcd.clear();
+      lcd.showMessage("Atur Jam Malam", 0, 0);
+      delay(1000);
+      lcd.clear();
+
+      lcd.showMessage("Mulai (0-23):", 0, 0);
+      int mulai = keypad.readIntFromKeypad(true, 0, 1); 
+      delay(1000);
+      if (mulai == -1) return;
+      lcd.clear();
+
+      lcd.clear();
+      lcd.showMessage("Selesai (0-23):", 0, 0);
+      int selesai = keypad.readIntFromKeypad(true, 0, 1);
+      delay(1000);
+      if (selesai == -1) return;
+      lcd.clear();
+
+      if (mulai >= 0 && mulai <= 23 && selesai >= 0 && selesai <= 23) {
+        jamMalamMulai = mulai;
+        jamMalamSelesai = selesai;
+
+        lcd.clear();
+        lcd.showMessage("Menyimpan...", 0, 0);
+        delay(500);  // jeda tampilan sebelum simpan
+        saveJamMalamPrefs();
+
+        lcd.clear();
+        lcd.showMessage("Jam malam disimpan", 0, 0);
+      } else {
+        lcd.clear();
+        lcd.showMessage("Input tidak valid", 0, 0);
+      }
+
+      delay(2000);
+      lcd.clear();
+    }
+
+//---------Method untuk mengelola akses relay----------------
+    // Method untuk mengaktifkan relay dengan timeout
     void activateRelayWithTimeout(unsigned long duration = 3000) {
       rel.activateAll();
       relayStartTime = millis();
       lcd.clear();
-      lcd.showMessage("Unlocked", 0, 0);
-      delay(3000);
+      lcd.showMessage("Unlocked", 5, 0);
+      lcd.showUnlockIcon(8, 1);
+      delay(3500);
       relayDuration = duration;
       isRelayHandlerActive = true;
     }
-
+    
+    // Method untuk memantau timeout relay kemudian menonaktifkannya
     void monitorRelayTimeout() {
       if (isRelayHandlerActive && millis() - relayStartTime >= relayDuration) {
         rel.deactivateSecond();
         delay(500);  
         rel.deactivateMain();
         lcd.clear();
-        lcd.showMessage("Locked", 0, 0);
-        delay(1500);
+        lcd.showMessage("Locked", 5, 0);
+        lcd.showLockIcon(8, 1);
+        delay(3000);
         lcd.clear();
         isRelayHandlerActive = false;
       }
     }
 
-    void blynkAccess() {
+//---------Method untuk akses Blynk, sidik jari, RFID, dan tombol fisik----------------
+    // Method untuk akses Blynk
+    bool blynkAccess() {
       if (!isRelayHandlerActive) {
         lcd.clear();
         lcd.showMessage("Akses Blynk", 0, 0);
-        activateRelayWithTimeout(5000);  // Contoh: 5 detik
+        activateRelayWithTimeout(4000);
+        return true;
       }
+      return false;  // Relay sudah aktif
     }
 
     // Method untuk menangani keamanan sidik jari
-    void fingerSecurity() {
+    bool fingerSecurity() {
       int id = fp.readIDStatus();
 
       if (id >= 0) {
         lcd.showMessage("Terdeteksi ID: " + String(id), 0, 0);
-        activateRelayWithTimeout(5000);
+        activateRelayWithTimeout(4000);
         lcd.clear();
+        return true;
       }
       else if (id == -1) {
         lcd.showMessage("Sidik Jari tidak", 0, 0);
         lcd.showMessage("terdaftar", 0, 1);
         delay(1500);
         lcd.clear();
+        return true;
       }
+      return false;
     }
     
     // Method untuk menangani keamanan RFID
-    void rfidSecurity() {
+    bool rfidSecurity() {
+
       String uid = "";
       int id = rfid.checkUIDAndGetID(uid);
 
       // Tidak ada kartu → tidak lakukan apa pun
-      if (id == -1) return;
+      if (id == -1) return false;
+
+      // cek jam malam
+      if (isNightTime()) {
+        lcd.clear();
+        lcd.showMessage("Jam malam aktif", 0, 0);
+        lcd.showMessage("Akses RFID ditolak", 0, 1);
+        delay(2000);
+        lcd.clear();
+        return false;
+      }
 
       // Kartu tidak terdaftar
       if (id == 0) {
@@ -1171,7 +1430,7 @@ class AccessManager {
         lcd.showMessage("terdaftar!", 0, 1);
         delay(1500);
         lcd.clear();
-        return;
+        return true;
       }
 
       // Kartu terdaftar → minta PIN
@@ -1197,7 +1456,7 @@ class AccessManager {
           lcd.showMessage("Timeout PIN", 0, 0);
           delay(1500);
           lcd.clear();
-          return;
+          return true;
         }
       }
 
@@ -1210,7 +1469,7 @@ class AccessManager {
         // Akses diberikan
         lcd.clear();
         lcd.showMessage("Akses Diberikan", 0, 0);
-        activateRelayWithTimeout(5000);
+        activateRelayWithTimeout(4000);
         lcd.clear();
       } else {
         // PIN salah
@@ -1218,16 +1477,23 @@ class AccessManager {
         lcd.showMessage("PIN Salah!", 0, 0);
         delay(1500);
         lcd.clear();
+        return true;  // PIN salah, akses ditolak
       }
+      return false;  // Akses berhasil
     }
 
     // Method untuk menangani tombol fisik
-    void handlePhysicalButton() {
+    bool handlePhysicalButton() {
+      bool wasActivated = false;
       io.handleButton([&]() {
         activateRelayWithTimeout(5000);
+        wasActivated = true;
       });
+      return wasActivated;
     }
 
+
+    //merubah PIN yang dimasukkan menjadi ****
     String waitForPIN() {
       String pin = "";
       while (pin.length() < 4) {
@@ -1254,7 +1520,7 @@ FingerprintSensor fp(lcd);
 IOHandler ioHandler(pcf, keypad, lcd);
 WiFiHandler wifi(lcd);
 TimeHandler timeHandler(lcd);
-AccessManager accessManager(lcd, fp, myRfid, keypad, doorRelayHandler, wifi, ioHandler);
+AccessManager accessManager(lcd, fp, myRfid, keypad, doorRelayHandler, wifi, timeHandler, ioHandler);
 
 // akses via Blynk
 BLYNK_WRITE(V0) {
@@ -1281,7 +1547,6 @@ void res() {
     ESP.restart();  
   }
 }
-
 
 void setup() {
   // Inisialisasi semua komponen
