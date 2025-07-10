@@ -55,6 +55,49 @@ class Display {
       B00000
     };
 
+    byte battery25[8] = {
+      B01110,
+      B10001,
+      B10001,
+      B10001,
+      B10001,
+      B10001,
+      B10001,
+      B11111
+    };
+
+    byte battery50[8] = {
+      B01110,
+      B10001,
+      B10001,
+      B11111,
+      B11111,
+      B10001,
+      B10001,
+      B11111
+    };
+
+    byte battery75[8] = {
+      B01110,
+      B11111,
+      B11111,
+      B11111,
+      B11111,
+      B10001,
+      B10001,
+      B11111
+    };
+
+    byte battery100[8] = {
+      B01110,
+      B11111,
+      B11111,
+      B11111,
+      B11111,
+      B11111,
+      B11111,
+      B11111
+    };
 
   public:
     // Constructor: inisialisasi alamat I2C dan ukuran LCD
@@ -64,9 +107,12 @@ class Display {
     void begin() {
       lcd.init();
       lcd.backlight();
-      lcd.createChar(0, lockChar);
-      lcd.createChar(1, unlockChar);
-
+      lcd.createChar(0, lockChar);       // 0
+      lcd.createChar(1, unlockChar);     // 1
+      lcd.createChar(2, battery25);      // 2
+      lcd.createChar(3, battery50);      // 3
+      lcd.createChar(4, battery75);      // 4
+      lcd.createChar(5, battery100);     // 5
     }
 
     // Method untuk pengujian LCD
@@ -115,6 +161,19 @@ class Display {
     void showUnlockIcon(uint8_t col, uint8_t row) {
       lcd.setCursor(col, row);
       lcd.write(byte(1));
+    }
+
+    // method tampilkan baterai.
+    void showBatteryIcon(int percent, int col, int row) {
+      uint8_t iconChar = 2; // default 25%
+
+      if (percent >= 75) iconChar = 5;
+      else if (percent >= 50) iconChar = 4;
+      else if (percent >= 25) iconChar = 3;
+      else iconChar = 2;
+
+      lcd.setCursor(col, row);
+      lcd.write(iconChar);
     }
 
     // Method untuk membersihkan layar
@@ -875,12 +934,77 @@ class WiFiHandler {
     }
 };
 
+class BatteryMonitor {
+  private:
+    int adcPin;
+    Display &lcd;
+    float calibrationFactor = 3.87; // Kalibrasi output step-down Anda
+    float minVoltage = 9.0;
+    float maxVoltage = 12.6;
+
+    unsigned long lastDisplayUpdate = 0;
+    unsigned long lastBlynkSend = 0;
+
+    const unsigned long displayInterval = 60000;  // 60 detik
+    const unsigned long blynkInterval = 30000;    // 30 detik
+
+    int lastDisplayed = -1;
+
+  public:
+    BatteryMonitor(int pin, Display &display) : adcPin(pin), lcd(display) {}
+
+    void begin() {
+      pinMode(adcPin, INPUT);
+    }
+
+    float readVoltage() {
+      const int NUM_SAMPLES = 30;
+      long total = 0;
+      for (int i = 0; i < NUM_SAMPLES; i++) {
+        total += analogRead(adcPin);
+        delay(2);
+      }
+      float avgReading = total / float(NUM_SAMPLES);
+      float voltage = (avgReading / 4095.0) * 3.3;
+      return voltage * calibrationFactor;
+    }
+
+    int getPercentage() {
+      float voltage = readVoltage();
+      float percent = ((voltage - minVoltage) / (maxVoltage - minVoltage)) * 100.0;
+      percent = constrain(percent, 0, 100);
+      return round(percent);
+    }
+
+    void updateDisplayIfNeeded() {
+        unsigned long now = millis();
+        if (now - lastDisplayUpdate >= displayInterval) {
+          int percent = getPercentage();
+          if (percent != lastDisplayed) {
+            lcd.showMessage(String(percent) + "%", 12, 0); // posisi di kanan atas
+            lastDisplayed = percent;
+          }
+          lastDisplayUpdate = now;
+        }
+      }
+
+    void sendToBlynkIfNeeded() {
+      unsigned long now = millis();
+      if (now - lastBlynkSend >= blynkInterval) {
+        int percent = getPercentage();
+        Blynk.virtualWrite(V2, percent); // Ganti V2 jika perlu
+        lastBlynkSend = now;
+      }
+    }
+};
+
 class TimeHandler {
   private:
     const char* ntpServer = "pool.ntp.org";
     const long gmtOffset_sec = 7 * 3600;  // GMT+7 WIB
     const int daylightOffset_sec = 0;
     Display &lcd;
+    BatteryMonitor &battery;
     Preferences prefs;
 
     unsigned long lastUpdate = 0;
@@ -889,7 +1013,8 @@ class TimeHandler {
 
   public:
     // Constructor dengan referensi ke objek Display
-    TimeHandler(Display &displayRef) : lcd(displayRef) {}
+    TimeHandler(Display &displayRef,  BatteryMonitor &battery) :
+      lcd(displayRef), battery(battery) {}
 
     // Inisialisasi waktu NTP
     void begin() {
@@ -920,9 +1045,20 @@ class TimeHandler {
       if (getLocalTime(&timeinfo)) {
         if (timeinfo.tm_min != lastDisplayedMinute) {
           lastDisplayedMinute = timeinfo.tm_min;
+
+          // Format waktu
           char timeStr[6];
           sprintf(timeStr, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-          lcd.showMessage(String(timeStr), 6, 0);
+          lcd.showMessage(String(timeStr), 6, 0);  // Menampilkan waktu
+
+          // Hapus jejak persen jika ada
+          lcd.showMessage("   ", 12, 0);  // overwrite area ikon baterai
+
+          // Tampilkan ikon baterai
+          int batteryPercent = battery.getPercentage();
+          lcd.showBatteryIcon(batteryPercent, 12, 0);
+
+          // Tampilkan ikon kunci tetap
           lcd.showLockIcon(8, 1);
         }
       }
@@ -942,6 +1078,7 @@ class AccessManager {
     WiFiHandler &wifi;
     TimeHandler &time;
     IOHandler io;
+    BatteryMonitor &battery;
     Preferences prefs;
     
     // Admin mode logic
@@ -966,8 +1103,8 @@ class AccessManager {
     int pinFailCount = 0;
   public:
     // Constructor
-    AccessManager(Display &d, FingerprintSensor &f, RFIDHandler &r, KeypadHandler &k, RelayHandler &rel, WiFiHandler &w, TimeHandler &time, IOHandler &io)
-      : lcd(d), fp(f), rfid(r), keypad(k), rel(rel), wifi(w), time(time), io(io) {}
+    AccessManager(Display &d, FingerprintSensor &f, RFIDHandler &r, KeypadHandler &k, RelayHandler &rel, WiFiHandler &w, TimeHandler &time, IOHandler &io, BatteryMonitor &battery)
+      : lcd(d), fp(f), rfid(r), keypad(k), rel(rel), wifi(w), time(time), io(io), battery(battery) {}
 
     // method untuk memulai AccessManager
     void begin() {
@@ -1003,6 +1140,9 @@ class AccessManager {
           if (fingerSecurity()) isBusy = true;
           if (rfidSecurity()) isBusy = true;
           if (handlePhysicalButton()) isBusy = true;
+          // battery.sendToBlynkIfNeeded(V5);
+          battery.updateDisplayIfNeeded();  // Saat standby
+          battery.sendToBlynkIfNeeded();           // Kirim tiap 30 detik
 
           // Tampilkan jam hanya jika LCD tidak sedang dipakai
           time.updateClock(!isBusy);
@@ -1376,6 +1516,10 @@ class AccessManager {
       delay(3500);
       relayDuration = duration;
       isRelayHandlerActive = true;
+      Blynk.virtualWrite(V3, 0); // tetap nyala
+      Blynk.setProperty(V3, "color", "#FF0000"); 
+      Blynk.virtualWrite(V4, 255); // mati
+      Blynk.setProperty(V4, "color", "#00FF00"); 
     }
     
     // Method untuk memantau timeout relay kemudian menonaktifkannya
@@ -1390,6 +1534,10 @@ class AccessManager {
         delay(3000);
         lcd.clear();
         isRelayHandlerActive = false;
+        Blynk.virtualWrite(V4, 0); // tetap nyala
+        Blynk.setProperty(V4, "color", "#00FF00"); 
+        Blynk.virtualWrite(V3, 255); // mati
+        Blynk.setProperty(V3, "color", "#FF0000"); 
       }
     }
 
@@ -1506,10 +1654,11 @@ class AccessManager {
         delay(1500);
         lcd.clear();
         if (pinFailCount >= 3) {
-          pinFailCount = 0;  // Reset setelah trigger buzzer
           io.buzzOn();
           delay(3000);
           io.buzzOff();
+          Blynk.logEvent("pin_gagal", "Percobaan PIN 3x gagal - UID: ");
+          pinFailCount = 0;  // Reset setelah trigger buzzer
         }
         return true;  // PIN salah, akses ditolak
       }
@@ -1574,8 +1723,9 @@ RFIDHandler myRfid(lcd, keypad);
 FingerprintSensor fp(lcd);
 IOHandler ioHandler(pcf, keypad, lcd);
 WiFiHandler wifi(lcd);
-TimeHandler timeHandler(lcd);
-AccessManager accessManager(lcd, fp, myRfid, keypad, doorRelayHandler, wifi, timeHandler, ioHandler);
+BatteryMonitor battery(34, lcd);
+TimeHandler timeHandler(lcd, battery);
+AccessManager accessManager(lcd, fp, myRfid, keypad, doorRelayHandler, wifi, timeHandler, ioHandler, battery);
 
 // akses via Blynk
 BLYNK_WRITE(V0) {
@@ -1604,7 +1754,6 @@ void res() {
 }
 
 void setup() {
-  // Inisialisasi semua komponen
   Serial.begin(115200);
   lcd.begin();
   Wire.begin();
@@ -1615,11 +1764,11 @@ void setup() {
   fp.begin();
   ioHandler.begin(); 
   timeHandler.begin();
+  battery.begin();
   accessManager.begin();
 }
 
 void loop() {
   Blynk.run();
   accessManager.loop();
-  // res();  // Cek reset sistem via keypad
 }
