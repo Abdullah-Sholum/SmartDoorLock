@@ -1739,6 +1739,54 @@ class AccessManager {
     }
 };
 
+class EmergencyResetHandler {
+  private:
+    String buffer = "";
+    const String resetCode = "12345";  // Bisa Anda ubah nanti
+
+    KeypadHandler &keypad;
+    Display &lcd;
+    WiFiHandler &wifi;
+    FingerprintSensor &fp;
+    RFIDHandler &rfid;
+    Preferences prefs;
+
+  public:
+    EmergencyResetHandler(KeypadHandler &keypadRef, Display &lcdRef, WiFiHandler &wifiRef, FingerprintSensor &fpRef, RFIDHandler &rfidRef)
+      : keypad(keypadRef), lcd(lcdRef), wifi(wifiRef), fp(fpRef), rfid(rfidRef) {}
+
+    void checkForReset() {
+      char key = keypad.read();
+      if (key >= '0' && key <= '9') {
+        buffer += key;
+        if (buffer.length() > resetCode.length()) {
+          buffer = buffer.substring(buffer.length() - resetCode.length());  // Jaga panjang buffer
+        }
+
+        if (buffer == resetCode) {
+          performReset();
+        }
+      }
+    }
+
+    void performReset() {
+      lcd.clear();
+      lcd.showMessage("Reset Sistem...", 0, 0);
+
+      // Reset semua konfigurasi
+      fp.deleteAll();
+      rfid.deleteAll();
+      wifi.resetSettings();
+      prefs.clear();
+
+      delay(1500);
+      lcd.clear();
+      lcd.showMessage("Reset selesai!", 0, 0);
+      delay(2000);
+      ESP.restart();  // Restart sistem
+    }
+};
+
 // --- Deklarasi objek secara global ---
 Display lcd;
 RelayHandler doorRelayHandler;
@@ -1750,6 +1798,7 @@ WiFiHandler wifi(lcd);
 BatteryMonitor battery(34, lcd);
 TimeHandler timeHandler(lcd, battery);
 AccessManager accessManager(lcd, fp, myRfid, keypad, doorRelayHandler, wifi, timeHandler, ioHandler, battery);
+EmergencyResetHandler emergencyReset(keypad, lcd, wifi, fp, myRfid);
 
 // akses via Blynk
 BLYNK_WRITE(V0) {
@@ -1793,6 +1842,7 @@ void setup() {
 }
 
 void loop() {
+  emergencyReset.checkForReset();  // Periksa terus setiap loop
   Blynk.run();
   accessManager.loop();
   myRfid.testRead();
