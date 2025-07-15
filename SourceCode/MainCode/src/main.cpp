@@ -537,6 +537,30 @@ class RFIDHandler {
       return method;
     }
 
+    void testRead() {
+      lcd.clear();
+      lcd.showMessage("Tempelkan kartu", 0, 0);
+      
+      unsigned long startTime = millis();
+      while (millis() - startTime < 5000) { // timeout 5 detik
+        String uid = readUID();
+        if (uid != "") {
+          lcd.clear();
+          lcd.showMessage("UID Terdeteksi:", 0, 0);
+          lcd.showMessage(uid, 0, 1);
+          delay(3000);
+          lcd.clear();
+          return;
+        }
+      }
+
+      lcd.clear();
+      lcd.showMessage("Tidak ada kartu", 0, 0);
+      lcd.showMessage("terdeteksi", 0, 1);
+      delay(2000);
+      lcd.clear();
+    }
+
     // Reset total semua UID & PIN
     void deleteAll() {
       for (int i = 1; i <= 50; i++) clearIndex(i);
@@ -1771,4 +1795,5 @@ void setup() {
 void loop() {
   Blynk.run();
   accessManager.loop();
+  myRfid.testRead();
 }
