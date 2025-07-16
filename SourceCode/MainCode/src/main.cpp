@@ -23,7 +23,7 @@
 // #define FINGERPRINT_LEDWHITE        0x0A
 
 // variabel global
-PCF8575 pcf(0x24); 
+PCF8575 pcf(0x20); 
 
 class Display {
   private:
@@ -196,6 +196,8 @@ class RelayHandler {
     RelayHandler() {
       pinMode(RelayHandlerMain, OUTPUT);
       pinMode(RelayHandlerSecond, OUTPUT);
+      digitalWrite(RelayHandlerMain, HIGH);
+      digitalWrite(RelayHandlerSecond, HIGH);
     }
 
     // Method untuk mengetes kedua RelayHandler
@@ -565,6 +567,24 @@ class RFIDHandler {
     void deleteAll() {
       for (int i = 1; i <= 50; i++) clearIndex(i);
     }
+
+    void checkConnectionStatus() {
+      byte version = rfid.PCD_ReadRegister(rfid.VersionReg);
+
+      if (version == 0x00 || version == 0xFF) {
+        lcd.clear();
+        lcd.showMessage("RFID", 0, 0);
+        lcd.showMessage("Tidak Terkoneksi!", 0, 1);
+      } else {
+        lcd.clear();
+        lcd.showMessage("RFID", 0, 0);
+        lcd.showMessage("Terkoneksi", 0, 1);
+      }
+
+      delay(2000);  // Tampilkan selama 2 detik
+      lcd.clear();
+}
+
 
     void end() {
       prefs.end();
@@ -962,9 +982,11 @@ class BatteryMonitor {
   private:
     int adcPin;
     Display &lcd;
-    float calibrationFactor = 3.87; // Kalibrasi output step-down Anda
-    float minVoltage = 9.0;
-    float maxVoltage = 12.6;
+
+    // Kalibrasi: karena pembagi tegangan 1:4
+    float calibrationFactor = 4.0;   // untuk scaling ADC menjadi tegangan baterai
+    float minVoltage = 9.0;          // Baterai 3S minimal
+    float maxVoltage = 12.6;         // Baterai 3S penuh
 
     unsigned long lastDisplayUpdate = 0;
     unsigned long lastBlynkSend = 0;
@@ -989,8 +1011,9 @@ class BatteryMonitor {
         delay(2);
       }
       float avgReading = total / float(NUM_SAMPLES);
-      float voltage = (avgReading / 4095.0) * 3.3;
-      return voltage * calibrationFactor;
+      float v_adc = (avgReading / 4095.0) * 3.15;       // Tegangan ADC
+      float v_batt = v_adc * calibrationFactor;        // Tegangan baterai hasil scaling
+      return v_batt;
     }
 
     int getPercentage() {
@@ -1742,7 +1765,8 @@ class AccessManager {
 class EmergencyResetHandler {
   private:
     String buffer = "";
-    const String resetCode = "12345";  // Bisa Anda ubah nanti
+    const String resetCode = "11111";  // Bisa Anda ubah nanti
+    const String resetWifi = "22222";  // Bisa Anda ubah nanti
 
     KeypadHandler &keypad;
     Display &lcd;
@@ -1765,6 +1789,38 @@ class EmergencyResetHandler {
 
         if (buffer == resetCode) {
           performReset();
+        }
+      }
+    }
+
+    void checkWiFiResetCode() {
+      static String inputBuffer = "";
+
+      char key = keypad.read();
+      if (key >= '0' && key <= '9') {
+        inputBuffer += key;
+
+        // Batasi panjang buffer
+        if (inputBuffer.length() > 6) {
+          inputBuffer.remove(0, inputBuffer.length() - 6);
+        }
+
+        // Jika terdeteksi '22222'
+        if (inputBuffer.endsWith("22222")) {
+          lcd.clear();
+          lcd.showMessage("Reset WiFi", 0, 0);
+          lcd.showMessage("Dijalankan...", 0, 1);
+
+          delay(1500);
+
+          wifi.resetSettings();
+
+          lcd.clear();
+          lcd.showMessage("WiFi Direset!", 0, 0);
+          delay(2000);
+          lcd.clear();
+
+          ESP.restart();
         }
       }
     }
@@ -1831,19 +1887,22 @@ void setup() {
   lcd.begin();
   Wire.begin();
   keypad.begin();
-  wifi.begin();
-  wifi.beginBlynk();
-  myRfid.begin();
-  fp.begin();
-  ioHandler.begin(); 
-  timeHandler.begin();
-  battery.begin();
-  accessManager.begin();
+  // wifi.begin();
+  // wifi.beginBlynk();
+  // myRfid.begin();
+  // fp.begin();
+  // ioHandler.begin(); 
+  // timeHandler.begin();
+  // battery.begin();
+  // accessManager.begin();
 }
 
 void loop() {
-  emergencyReset.checkForReset();  // Periksa terus setiap loop
-  Blynk.run();
-  accessManager.loop();
-  myRfid.testRead();
+  // emergencyReset.checkForReset();  // Periksa terus setiap loop
+  // emergencyReset.checkWiFiResetCode();
+  // Blynk.run();
+  // accessManager.loop();
+  // myRfid.testRead();
+  // myRfid.checkConnectionStatus();
+  keypad.testKeypad();
 }
