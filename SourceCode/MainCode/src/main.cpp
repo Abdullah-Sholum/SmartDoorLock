@@ -401,6 +401,19 @@ class RFIDHandler {
       SPI.begin(18, 19, 23, SS_PIN);
       rfid.PCD_Init();
       prefs.begin("rfid_db", false);
+
+      // Cek koneksi RFID saat inisialisasi
+      byte version = rfid.PCD_ReadRegister(rfid.VersionReg);
+
+      lcd.clear();
+      lcd.showMessage("RFID", 0, 0);
+      if (version == 0x00 || version == 0xFF) {
+        lcd.showMessage("Tidak Terkoneksi!", 0, 1);
+      } else {
+        lcd.showMessage("Terkoneksi", 0, 1);
+      }
+      delay(2000);
+      lcd.clear();
     }
 
     // Membaca UID dari kartu dan mengembalikannya sebagai String uppercase
@@ -584,7 +597,6 @@ class RFIDHandler {
       delay(2000);  // Tampilkan selama 2 detik
       lcd.clear();
 }
-
 
     void end() {
       prefs.end();
@@ -1765,9 +1777,6 @@ class AccessManager {
 class EmergencyResetHandler {
   private:
     String buffer = "";
-    const String resetCode = "11111";  // Bisa Anda ubah nanti
-    const String resetWifi = "22222";  // Bisa Anda ubah nanti
-
     KeypadHandler &keypad;
     Display &lcd;
     WiFiHandler &wifi;
@@ -1775,42 +1784,56 @@ class EmergencyResetHandler {
     RFIDHandler &rfid;
     Preferences prefs;
 
+    const String resetAllCode = "11111";
+    const String resetFPCode  = "22222";
+    const String resetWiFiCode = "33333";
+
   public:
     EmergencyResetHandler(KeypadHandler &keypadRef, Display &lcdRef, WiFiHandler &wifiRef, FingerprintSensor &fpRef, RFIDHandler &rfidRef)
       : keypad(keypadRef), lcd(lcdRef), wifi(wifiRef), fp(fpRef), rfid(rfidRef) {}
 
-    void checkForReset() {
+    void checkResetCode() {
       char key = keypad.read();
       if (key >= '0' && key <= '9') {
         buffer += key;
-        if (buffer.length() > resetCode.length()) {
-          buffer = buffer.substring(buffer.length() - resetCode.length());  // Jaga panjang buffer
+        if (buffer.length() > 5) {
+          buffer = buffer.substring(buffer.length() - 5);  // Batasi buffer ke 5 digit terakhir
         }
 
-        if (buffer == resetCode) {
-          performReset();
+        if (buffer == resetAllCode) {
+          lcd.clear();
+          lcd.showMessage("Reset Semua", 0, 0);
+          lcd.showMessage("Berlangsung...", 0, 1);
+          delay(1500);
+
+          fp.deleteAll();
+          rfid.deleteAll();
+          wifi.resetSettings();
+          prefs.clear();
+
+          lcd.clear();
+          lcd.showMessage("Semua Reset!", 0, 0);
+          delay(2000);
+          ESP.restart();
         }
-      }
-    }
+        else if (buffer == resetFPCode) {
+          lcd.clear();
+          lcd.showMessage("Reset Fingerprint", 0, 0);
+          lcd.showMessage("Berlangsung...", 0, 1);
+          delay(1500);
 
-    void checkWiFiResetCode() {
-      static String inputBuffer = "";
+          fp.deleteAll();
 
-      char key = keypad.read();
-      if (key >= '0' && key <= '9') {
-        inputBuffer += key;
-
-        // Batasi panjang buffer
-        if (inputBuffer.length() > 6) {
-          inputBuffer.remove(0, inputBuffer.length() - 6);
+          lcd.clear();
+          lcd.showMessage("Fingerprint", 0, 0);
+          lcd.showMessage("Telah Direset!", 0, 1);
+          delay(2000);
+          ESP.restart();
         }
-
-        // Jika terdeteksi '22222'
-        if (inputBuffer.endsWith("22222")) {
+        else if (buffer == resetWiFiCode) {
           lcd.clear();
           lcd.showMessage("Reset WiFi", 0, 0);
-          lcd.showMessage("Dijalankan...", 0, 1);
-
+          lcd.showMessage("Berlangsung...", 0, 1);
           delay(1500);
 
           wifi.resetSettings();
@@ -1818,28 +1841,9 @@ class EmergencyResetHandler {
           lcd.clear();
           lcd.showMessage("WiFi Direset!", 0, 0);
           delay(2000);
-          lcd.clear();
-
           ESP.restart();
         }
       }
-    }
-
-    void performReset() {
-      lcd.clear();
-      lcd.showMessage("Reset Sistem...", 0, 0);
-
-      // Reset semua konfigurasi
-      fp.deleteAll();
-      rfid.deleteAll();
-      wifi.resetSettings();
-      prefs.clear();
-
-      delay(1500);
-      lcd.clear();
-      lcd.showMessage("Reset selesai!", 0, 0);
-      delay(2000);
-      ESP.restart();  // Restart sistem
     }
 };
 
@@ -1861,48 +1865,27 @@ BLYNK_WRITE(V0) {
   accessManager.blynkAccess();
 }
 
-void res() {
-  Preferences prefs;
-  char key = keypad.read();
-  if (key == '1') {
-    lcd.clear();
-    lcd.showMessage("Reset Sistem...", 0, 0);
-    fp.deleteAll();
-    myRfid.deleteAll();
-    wifi.resetSettings();
-    // Reset flag admin di Preferences
-    prefs.begin("access", false);
-    prefs.putBool("admin_ok", false);
-    prefs.end();
-    accessManager.begin();  // Reinitialize AccessManager
-    lcd.showMessage("Sistem direset", 0, 1);
-    delay(2000);
-    lcd.clear();
-    ESP.restart();  
-  }
-}
-
 void setup() {
   Serial.begin(115200);
   lcd.begin();
   Wire.begin();
   keypad.begin();
-  // wifi.begin();
-  // wifi.beginBlynk();
-  // myRfid.begin();
-  // fp.begin();
-  // ioHandler.begin(); 
-  // timeHandler.begin();
-  // battery.begin();
-  // accessManager.begin();
+  wifi.begin();
+  wifi.beginBlynk();
+  myRfid.begin();
+  fp.begin();
+  ioHandler.begin(); 
+  timeHandler.begin();
+  battery.begin();
+  accessManager.begin();
 }
 
 void loop() {
-  // emergencyReset.checkForReset();  // Periksa terus setiap loop
-  // emergencyReset.checkWiFiResetCode();
-  // Blynk.run();
-  // accessManager.loop();
+  emergencyReset.checkResetCode();  
+  Blynk.run();
+  accessManager.loop();
   // myRfid.testRead();
   // myRfid.checkConnectionStatus();
-  keypad.testKeypad();
+  // keypad.testKeypad();
+  // fp.testCapture();
 }
