@@ -11,16 +11,6 @@
 #include <Preferences.h>      
 #include <BlynkSimpleEsp32.h> 
 #include <time.h>
-// #define FINGERPRINT_LEDON           0x01
-// #define FINGERPRINT_LEDOFF          0x02
-// #define FINGERPRINT_LEDBREATHING    0x03
-// #define FINGERPRINT_LEDRED          0x04
-// #define FINGERPRINT_LEDGREEN        0x05
-// #define FINGERPRINT_LEDBLUE         0x06
-// #define FINGERPRINT_LEDYELLOW       0x07
-// #define FINGERPRINT_LEDCYAN         0x08
-// #define FINGERPRINT_LEDMAGENTA      0x09
-// #define FINGERPRINT_LEDWHITE        0x0A
 
 // variabel global
 PCF8575 pcf(0x20); 
@@ -1584,9 +1574,9 @@ class AccessManager {
     // Method untuk memantau timeout relay kemudian menonaktifkannya
     void monitorRelayTimeout() {
       if (isRelayHandlerActive && millis() - relayStartTime >= relayDuration) {
-        rel.deactivateSecond();
-        delay(500);  
         rel.deactivateMain();
+        delay(5000);  
+        rel.deactivateSecond();
         lcd.clear();
         lcd.showMessage("Locked", 5, 0);
         lcd.showLockIcon(8, 1);
