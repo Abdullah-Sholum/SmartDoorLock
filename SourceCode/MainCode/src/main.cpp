@@ -1,4 +1,4 @@
-#include <Arduino.h>
+ #include <Arduino.h>
 #include <Wire.h> 
 #include "credentials.h"         
 #include <LiquidCrystal_I2C.h>
@@ -462,7 +462,7 @@ class RFIDHandler {
 
       lcd.clear();
       lcd.showMessage("Tempelkan kartu", 0, 0);
-      delay(800);
+      delay(3000);
       String uid = readUID();
 
       if (uid == "") {
@@ -1556,7 +1556,7 @@ class AccessManager {
 
 //---------Method untuk mengelola akses relay----------------
     // Method untuk mengaktifkan relay dengan timeout
-    void activateRelayWithTimeout(unsigned long duration = 3000) {
+    void activateRelayWithTimeout(unsigned long duration = 2000) {
       rel.activateAll();
       relayStartTime = millis();
       lcd.clear();
@@ -1574,9 +1574,9 @@ class AccessManager {
     // Method untuk memantau timeout relay kemudian menonaktifkannya
     void monitorRelayTimeout() {
       if (isRelayHandlerActive && millis() - relayStartTime >= relayDuration) {
-        rel.deactivateMain();
-        delay(5000);  
         rel.deactivateSecond();
+        delay(8000);  
+        rel.deactivateMain();
         lcd.clear();
         lcd.showMessage("Locked", 5, 0);
         lcd.showLockIcon(8, 1);
@@ -1596,7 +1596,7 @@ class AccessManager {
       if (!isRelayHandlerActive) {
         lcd.clear();
         lcd.showMessage("Akses Blynk", 0, 0);
-        activateRelayWithTimeout(4000);
+        activateRelayWithTimeout(2000);
         return true;
       }
       return false;  // Relay sudah aktif
@@ -1608,7 +1608,7 @@ class AccessManager {
 
       if (id >= 0) {
         lcd.showMessage("Terdeteksi ID: " + String(id), 0, 0);
-        activateRelayWithTimeout(4000);
+        activateRelayWithTimeout(2000);
         lcd.clear();
         return true;
       }
@@ -1693,7 +1693,7 @@ class AccessManager {
         pinFailCount = 0;
         lcd.clear();
         lcd.showMessage("Akses Diberikan", 0, 0);
-        activateRelayWithTimeout(4000);
+        activateRelayWithTimeout(2000);
         lcd.clear();
       } else {
         // PIN salah
@@ -1718,7 +1718,7 @@ class AccessManager {
     bool handlePhysicalButton() {
       bool wasActivated = false;
       io.handleButton([&]() {
-        activateRelayWithTimeout(5000);
+        activateRelayWithTimeout(3000);
         wasActivated = true;
       });
       return wasActivated;
