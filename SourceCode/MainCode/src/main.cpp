@@ -1,4 +1,4 @@
- #include <Arduino.h>
+#include <Arduino.h>
 #include <Wire.h> 
 #include "credentials.h"         
 #include <LiquidCrystal_I2C.h>
@@ -1874,8 +1874,4 @@ void loop() {
   emergencyReset.checkResetCode();  
   Blynk.run();
   accessManager.loop();
-  // myRfid.testRead();
-  // myRfid.checkConnectionStatus();
-  // keypad.testKeypad();
-  // fp.testCapture();
 }
