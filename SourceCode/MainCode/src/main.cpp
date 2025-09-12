@@ -550,20 +550,22 @@ class RFIDHandler {
       while (millis() - startTime < 5000) { // timeout 5 detik
         String uid = readUID();
         if (uid != "") {
-          lcd.clear();
-          lcd.showMessage("UID Terdeteksi:", 0, 0);
-          lcd.showMessage(uid, 0, 1);
+          Serial.println("UID: " + uid);
+          // lcd.clear();
+          // lcd.showMessage("UID Terdeteksi:", 0, 0);
+          // lcd.showMessage(uid, 0, 1);
           delay(3000);
-          lcd.clear();
+          // lcd.clear();
           return;
         }
       }
 
-      lcd.clear();
-      lcd.showMessage("Tidak ada kartu", 0, 0);
-      lcd.showMessage("terdeteksi", 0, 1);
-      delay(2000);
-      lcd.clear();
+      Serial.println("Tidak ada kartu terdeteksi");
+      // lcd.clear();
+      // lcd.showMessage("Tidak ada kartu", 0, 0);
+      // lcd.showMessage("terdeteksi", 0, 1);
+      // delay(2000);
+      // lcd.clear();
     }
 
     // Reset total semua UID & PIN
